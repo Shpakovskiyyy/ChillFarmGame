@@ -9,7 +9,7 @@ class UNiagaraSystem;
 class UInputMappingContext;
 class UInputAction;
 
-DECLARE_LOG_CATEGORY_EXTERN(LogTemplateCharacter, Log, All);
+DECLARE_LOG_CATEGORY_EXTERN(LogCFGPlayerController, Log, All);
 
 UCLASS()
 class AChillFarmGamePlayerController : public APlayerController

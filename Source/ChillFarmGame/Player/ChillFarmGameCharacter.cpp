@@ -12,8 +12,8 @@ static const auto s_CharacterCapsuleSize = FVector2D(42.f, 96.0f);
 
 static const auto s_CharacterMovementRotationRate = FRotator(0.f, 640.f, 0.f);
 
-static constexpr auto s_TargetSpringArmLength = 800.f; 
-static const auto s_SpringArmRelativeRotation = FRotator(-60.f, 0.f, 0.f);
+static constexpr auto s_TargetSpringArmLength = 500.f; 
+static const auto s_SpringArmRelativeRotation = FRotator(-25.f, 0.f, 0.f);
 
 
 AChillFarmGameCharacter::AChillFarmGameCharacter()
@@ -33,7 +33,10 @@ AChillFarmGameCharacter::AChillFarmGameCharacter()
 	
 	SpringArm = CreateDefaultSubobject<USpringArmComponent>( TEXT("SpringArm") );
 	SpringArm->SetupAttachment( RootComponent );
-	SpringArm->SetUsingAbsoluteRotation(true); // Don't want arm to rotate when character does
+	SpringArm->SetUsingAbsoluteRotation(false); // Should SpringArm rotate when the character does
+	SpringArm->bEnableCameraLag = true;
+	SpringArm->bEnableCameraRotationLag = true;
+	SpringArm->CameraLagSpeed = 4.f;
 	SpringArm->TargetArmLength = s_TargetSpringArmLength;
 	SpringArm->SetRelativeRotation( s_SpringArmRelativeRotation );
 	SpringArm->bDoCollisionTest = false; // Don't want to pull camera in when it collides with level

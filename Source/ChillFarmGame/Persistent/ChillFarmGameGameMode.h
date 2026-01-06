@@ -12,4 +12,8 @@ class AChillFarmGameGameMode : public AGameModeBase
 
 public:
 	AChillFarmGameGameMode();
+
+protected:
+	virtual void BeginPlay() override;
+	void BeginPlayDeferred();
 };

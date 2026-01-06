@@ -6,6 +6,22 @@ public class ChillFarmGame : ModuleRules
 	{
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 
-        PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore", "NavigationSystem", "AIModule", "Niagara", "EnhancedInput" });
+		PublicIncludePaths.AddRange(new string[] {
+			"ChillFarmGame/Crops",
+			"ChillFarmGame/Interfaces",
+			"ChillFarmGame/Persistent",
+			"ChillFarmGame/Player",
+			"ChillFarmGame/WorldGeneration"
+		});
+        PublicDependencyModuleNames.AddRange(new string[] { 
+	        "Core",
+	        "CoreUObject",
+	        "Engine",
+	        "InputCore",
+	        "NavigationSystem",
+	        "AIModule",
+	        "Niagara",
+	        "EnhancedInput",
+        });
     }
 }

@@ -9,4 +9,4 @@ call %ScriptsDirectory%"CleanIntermediateFiles.bat"
 
 call %ScriptsDirectory%"GenerateProjectFiles.bat" "%VersionSelector%" "%ProjectFile%"
 
-@echo Finished regenerating project files
+@echo Finished project files regen

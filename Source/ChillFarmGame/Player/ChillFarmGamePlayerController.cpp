@@ -1,5 +1,4 @@
 #include "ChillFarmGamePlayerController.h"
-#include "ChillFarmGameCharacter.h"
 
 #include "GameFramework/Pawn.h"
 #include "Engine/World.h"
@@ -12,7 +11,7 @@
 #include "Blueprint/AIBlueprintHelperLibrary.h"
 
 
-DEFINE_LOG_CATEGORY(LogTemplateCharacter);
+DEFINE_LOG_CATEGORY(LogCFGPlayerController);
 
 
 AChillFarmGamePlayerController::AChillFarmGamePlayerController()
@@ -25,13 +24,12 @@ AChillFarmGamePlayerController::AChillFarmGamePlayerController()
 
 void AChillFarmGamePlayerController::BeginPlay()
 {
-	// Call the base class
 	Super::BeginPlay();
 }
 
 void AChillFarmGamePlayerController::SetupInputComponent()
 {
-	// set up gameplay key bindings
+	// Set up gameplay key bindings
 	Super::SetupInputComponent();
 
 	// Add Input Mapping Context
@@ -46,7 +44,7 @@ void AChillFarmGamePlayerController::SetupInputComponent()
 		EnhancedInputComponent->BindAction( SetDestinationClickAction, ETriggerEvent::Completed, this, &AChillFarmGamePlayerController::OnSetDestinationReleased );
 		EnhancedInputComponent->BindAction( SetDestinationClickAction, ETriggerEvent::Canceled, this, &AChillFarmGamePlayerController::OnSetDestinationReleased );
 	}
-	else UE_LOG(LogTemplateCharacter, Error, TEXT("'%s' Failed to find EnhancedInputComponent"), *GetNameSafe(this));
+	else UE_LOG(LogCFGPlayerController, Error, TEXT("'%s' Failed to find EnhancedInputComponent"), *GetNameSafe(this));
 }
 
 void AChillFarmGamePlayerController::OnInputStarted()
@@ -69,7 +67,7 @@ void AChillFarmGamePlayerController::OnSetDestinationTriggered()
 	auto ControlledPawn = GetPawn();
 	if (!ControlledPawn) return;
 
-	FVector WorldDirection = (CachedDestination - ControlledPawn->GetActorLocation()).GetSafeNormal();
+	auto WorldDirection = (CachedDestination - ControlledPawn->GetActorLocation()).GetSafeNormal();
 	ControlledPawn->AddMovementInput(WorldDirection, 1.0, false);
 }
 
