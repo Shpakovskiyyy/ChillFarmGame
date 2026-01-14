@@ -1,11 +1,17 @@
 ﻿#pragma once
 
 #include "CoreMinimal.h"
-#include "TileBase.h"
+#include "TileData.h"
+#include "TileNoiseContext.h"
+#include "TileVisualKey.h"
 #include "GameFramework/Actor.h"
 #include "TileWorldGenerator.generated.h"
 
+class UTilesGenerationRuleSet;
+class UTileDataGrid;
 class ATileGrid;
+class UBiomeTypeData;
+class UBiomeTypeDataSet;
 
 DECLARE_LOG_CATEGORY_EXTERN(LogTileWorldGenerator, Log, All);
 
@@ -20,10 +26,10 @@ public:
 	ATileWorldGenerator();
 
 public:
-	UFUNCTION(CallInEditor, BlueprintCallable, Category = "Generation")
+	UFUNCTION(CallInEditor, BlueprintCallable, Category = "Generation Settings | Generation")
 	void GenerateWorld();
 
-	UFUNCTION(CallInEditor, BlueprintCallable, Category = "Generation")
+	UFUNCTION(CallInEditor, BlueprintCallable, Category = "Generation Settings | Generation")
 	void CleanGeneratedWorld();
 
 public:
@@ -31,70 +37,108 @@ public:
 
 protected:
 	void ProcessChunk(int32 StartX, int32 StartY, const FVector2D& NoiseOffset, const FVector2D& WarpOffset);
-	ETileType GenerateTile(int32 X, int32 Y, const FVector2D& NoiseOffset, const FVector2D& WarpOffset);
 
 protected:
-	virtual void PostEditChangeProperty(FPropertyChangedEvent& PropertyChangedEvent) override;
+	FTileData GenerateTile(int32 X, int32 Y, const FVector2D& NoiseOffset, const FVector2D& WarpOffset);
+
+	// Returns float in range [0-1], where 0 is tile that is deep in the biome and 1 is nearly border.
+	float GetBiomeBorderFactor(float Height, float Moisture, const UBiomeTypeData* Biome);
+	float GetBiomeBorderNoise(int32 X, int32 Y);
+
+protected:
+	void ApplySmoothing();
+	void ApplyWaterEdgeSmoothing();
+	void ApplyTileSmoothing();
+	void ApplyBiomeSmoothing();
+
+protected:
+	STileNoiseContext GenerateTileNoise(int32 X, int32 Y, const FVector2D& NoiseOffset, const FVector2D& WarpOffset);
+	UBiomeTypeData* GenerateBiomeData(int32 InX, int32 InY, const STileNoiseContext& NoiseContext);
+	
+protected:
+	float GetSecondaryNoise(int32 X, int32 Y);
+
+private:
+	// TODO Maybe move to some utility
+	float DistanceToRange(float InValue, const FVector2D& Range);
 
 protected:
 	/* Grid settings */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grid Settings")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Generation Settings | Grid Settings")
 	int32 WorldSeed = 1;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grid Settings")
-	int32 GridSizeX = 200;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grid Settings")
-	int32 GridSizeY = 200;
-
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Grid Settings")
-	float GridTileSize = 200.f;
-
-	UPROPERTY(VisibleAnywhere, BlueprintReadWrite, Category = "Grid Settings")
-	int32 DefaultTileMeshSize = 100;
-	/* Grid settings */
-
-	/* Generation Settings */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Generation Settings")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Generation Settings | Grid Settings")
 	int32 ChunkSize = 64;
 
-	
-	/* Generation Settings */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Generation Settings | Grid Settings")
+	int32 GridSizeX = 128;
 
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Generation Settings | Grid Settings")
+	int32 GridSizeY = 128;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Generation Settings | Grid Settings")
+	float GridTileSize = 100.f;
+
+	UPROPERTY(VisibleAnywhere, BlueprintReadWrite, Category = "Generation Settings | Grid Settings")
+	int32 DefaultTileMeshSize = 100;
+
+	UPROPERTY(EditDefaultsOnly)
+	float BiomeBorderWidth = 0.08f;
+
+	UPROPERTY(EditDefaultsOnly)
+	float BiomeBorderNoiseScale = 0.12f;
+
+	UPROPERTY(EditDefaultsOnly)
+	float BiomeBorderStrength = 0.3f;
+	/* Grid settings */
+
+protected:
 	/* Noise Settings */
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Noise Settings")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Generation Settings | Noise Settings")
 	float NoiseScale = 0.025f; // Perlin sampling scale
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Noise Settings")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Generation Settings | Noise Settings")
+	float HeightNoiseScale = 0.005f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Generation Settings | Noise Settings")
+	float MoistureNoiseScale = 0.005f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Generation Settings | Noise Settings")
+	float SecondaryNoiseScale = 0.15f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Generation Settings | Noise Settings")
+	float SecondaryNoiseStrength = 0.25f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Generation Settings | Noise Settings")
 	float WarpStrength = 0.1f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Noise Settings")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Generation Settings | Noise Settings")
 	float NoiseOffsetRange = 1000.f;
 
-	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Noise Settings")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Generation Settings | Noise Settings")
 	float WarpOffsetRange = 2000.f;
-
-	// UPROPERTY(EditAnywhere, Category = "Noise Settings")
-	// float DirtDistributionFactor = 0.35f;
-	//
-	// UPROPERTY(EditAnywhere, Category = "Noise Settings")
-	// float DirtDistributionFactor = 0.35f;
-	//
-	// UPROPERTY(EditAnywhere, Category = "Noise Settings")
-	// float DirtDistributionFactor = 0.35f;
 	/* Noise Settings */
 
 protected:
-	FOnTerrainGenerated OnTerrainGenerated;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Generation Settings | World Generation Settings")
+	float WaterLevel = 0.3f;
 
-private:
-	FCriticalSection TileGridMutex;
+protected:
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Generation Settings | World Generation")
+	UTilesGenerationRuleSet* DefaultTileGenerationRuleSet;
 
-private:
-	FVector2D SeedOffset = FVector2D::ZeroVector;
-	
+protected:
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Generation Settings | World Generation")
+	UBiomeTypeDataSet* BiomeDataSet;
+
 private:
 	UPROPERTY()
+	UTileDataGrid* LogicalGrid;
+	
+	UPROPERTY()
 	ATileGrid* TileGrid = nullptr;
+
+private:
+	FOnTerrainGenerated OnTerrainGenerated;
 	
 };

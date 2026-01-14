@@ -80,6 +80,7 @@ void AChillFarmGamePlayerController::OnSetDestinationReleased()
 		UAIBlueprintHelperLibrary::SimpleMoveToLocation( this, CachedDestination );
 		UNiagaraFunctionLibrary::SpawnSystemAtLocation( this, CursorPointEffect, CachedDestination, FRotator::ZeroRotator, FVector::OneVector, true, true, ENCPoolMethod::None, true );
 	}
+	else UE_LOG(LogTemp, Warning, TEXT("No MoveTo activated because FollowTime > ShortPressThreshold: FollowTime - %f, ShortPressThreshold - %f"), FollowTime, ShortPressThreshold)
 
 	FollowTime = 0.f;
 }

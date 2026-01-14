@@ -1,13 +1,19 @@
-﻿// Fill out your copyright notice in the Description page of Project Settings.
-
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
-#include "TileBase.h"
+#include "TileVisualKey.h"
+#include "TileChunkVisualRepresentation.h"
+
 #include "GameFramework/Actor.h"
 #include "TileGrid.generated.h"
 
+class UTileChunkNavComponent;
+class ANavMeshBoundsVolume;
+class UTileDataGrid;
+class UTilesVisualDataSet;
+class UTileTypeVisualData;
 class UHierarchicalInstancedStaticMeshComponent;
+
 
 UCLASS()
 class CHILLFARMGAME_API ATileGrid : public AActor
@@ -18,23 +24,27 @@ public:
 	ATileGrid();
 
 public:
-	void SetupMeshComponents();
+	void CreateChunk(const FIntPoint& ChunkIndex, const TMap<FTileVisualKey, TArray<FTransform>>& InTransforms);
+	void ClearAllChunks();
 
 public:
-	void AddInstances(ETileType InTileType, const TArray<FTransform>& InTransform);
-	void ClearAllInstances();
+	void RebuildChunk(const FIntPoint& ChunkCoordinates, UTileDataGrid* TileGridData, int32 ChunkSize, float TileSize);
 
 public:
 	void FinalizeNavigation();
 
 protected:
-	UPROPERTY(BlueprintReadOnly, Category = "Grid Components")
-	TMap<ETileType, UHierarchicalInstancedStaticMeshComponent*> Tiles;
+	virtual void OnConstruction(const FTransform& Transform) override;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid Components")
-	TMap<ETileType, UMaterialInstance*> TileTypeMaterials;
+public:
+	UPROPERTY(EditAnywhere, Category="Tiles")
+	UTilesVisualDataSet* TilesVisualSet;
 
-protected:
-	FString MeshPath = "/Game/ChillFarmGame/GenerationTest/Meshes/SM_TestPlane.SM_TestPlane";
+private:
+	UPROPERTY()
+	TMap<FIntPoint, FTileChunkVisualRepresentation> Chunks;
+
+private:
+	TWeakObjectPtr<ANavMeshBoundsVolume> NavMeshBoundsVolume;
 	
 };
