@@ -1,16 +1,18 @@
 ﻿#include "TileWorldGenerator.h"
 
-#include "TileGrid.h"
+#include "TileVisualGrid.h"
 #include "TilesGenerationRuleSet.h"
 #include "TileDataGrid.h"
 #include "TileNeighborResolver.h"
 
 #include "BiomeTypeData.h"
 #include "BiomeTypeDataSet.h"
+#include "TileWorldPostProcessor.h"
 
 #include "Kismet/GameplayStatics.h"
 
 #include "Stats/StatsMisc.h"
+#include "TileMutationHistory/TileMutationHelper.h"
 
 
 DEFINE_LOG_CATEGORY(LogTileWorldGenerator);
@@ -21,7 +23,7 @@ ATileWorldGenerator::ATileWorldGenerator()
 	PrimaryActorTick.bCanEverTick = false;
 	PrimaryActorTick.bStartWithTickEnabled = false;
 
-	LogicalGrid = CreateDefaultSubobject<UTileDataGrid>(TEXT("Logical Grid"));
+	DataGrid = CreateDefaultSubobject<UTileDataGrid>(TEXT("Logical Grid"));
 }
 
 void ATileWorldGenerator::GenerateWorld()
@@ -29,24 +31,25 @@ void ATileWorldGenerator::GenerateWorld()
 	auto TimeElapsed = 0.0;
 	{
 		SCOPE_SECONDS_COUNTER(TimeElapsed);
+
+		if (!DataGrid)
+		{
+			DataGrid = NewObject<UTileDataGrid>(this, TEXT("Logical Grid"));
+		}
+		DataGrid->ClearAllChunks();
+		
 		if (!TileGrid)
 		{
-			TileGrid = Cast<ATileGrid>(UGameplayStatics::GetActorOfClass(this, ATileGrid::StaticClass()));
+			TileGrid = Cast<ATileVisualGrid>(UGameplayStatics::GetActorOfClass(this, ATileVisualGrid::StaticClass()));
 		}
-		TileGrid->ClearAllChunks();
-
-		if (!LogicalGrid)
-		{
-			LogicalGrid = NewObject<UTileDataGrid>(this, TEXT("Logical Grid"));
-		}
-		LogicalGrid->ClearAllChunks();
-		LogicalGrid->Initialize(FIntPoint(GridSizeX, GridSizeY), GridTileSize);
+		TileGrid->Initialize(ChunkSize, GridTileSize);
+		
+		DataGrid->Initialize(FIntPoint(GridSizeX, GridSizeY), GridTileSize);
 
 		FRandomStream RNG(WorldSeed);
 		FVector2D NoiseOffset(RNG.FRand() * NoiseOffsetRange, RNG.FRand() * NoiseOffsetRange);
 		FVector2D WarpOffset(RNG.FRand() * WarpOffsetRange, RNG.FRand() * WarpOffsetRange);
-
-		TMap<FIntPoint, TMap<FTileVisualKey, TArray<FTransform>>> BatchedChunkVisualizations;
+		
 		for (auto CX = 0; CX < GridSizeX; CX += ChunkSize)
 		{
 			for (auto CY = 0; CY < GridSizeY; CY += ChunkSize)
@@ -55,7 +58,18 @@ void ATileWorldGenerator::GenerateWorld()
 			}
 		}
 		
-		//TileGrid->FinalizeNavigation();
+		DataGrid->RecalculateNeighbors();
+	
+		if (!PostProcessor) PostProcessor = NewObject<UTileWorldPostProcessor>(this, TEXT("WorldPostProcessor"));
+		PostProcessor->ProcessWorld(DataGrid);
+
+		for (int32 CX = 0; CX < GridSizeX; CX += ChunkSize)
+		{
+			for (int32 CY = 0; CY < GridSizeY; CY += ChunkSize)
+			{
+				VisualizeChunk(CX, CY);
+			}
+		}
 	}
 	
 	UE_LOG(LogTileWorldGenerator, Display, TEXT("WORLD GENERATED IN %f sec"), TimeElapsed);
@@ -79,212 +93,88 @@ void ATileWorldGenerator::ProcessChunk(int32 StartX, int32 StartY, const FVector
 	{
 		for (auto Y = StartY; Y < EndY; Y++)
 		{
-			auto TileData = GenerateTile(X, Y, NoiseOffset, WarpOffset);
-			LogicalGrid->SetTile(X, Y, TileData);
+			GenerateTile(X, Y, NoiseOffset, WarpOffset);
+			//DataGrid->SetTile(X, Y, TileData);
 		}
 	}
-	
-	LogicalGrid->RecalculateNeighbors();
-	ApplySmoothing();
-
-	TMap<FTileVisualKey, TArray<FTransform>> Batched;
-	for (auto X = StartX; X < EndX; X++)
-	{
-		for (auto Y = StartY; Y < EndY; Y++)
-		{
-			auto Tile = LogicalGrid->GetTileChecked(X, Y);
-			auto ResolvedKey = FTileNeighborResolver::Resolve(Tile->Type, Tile->NeighborMask);
-
-			FVector WorldPos(
-				X * GridTileSize,
-				Y * GridTileSize,
-				0.f
-			);
-
-			Batched.FindOrAdd(ResolvedKey).Emplace(
-				FRotator(0, ResolvedKey.Rotation, 0),
-				WorldPos,
-				FVector::OneVector
-			);
-		}
-	}
-
-	TileGrid->CreateChunk(
-		FIntPoint(StartX / ChunkSize, StartY / ChunkSize),
-		Batched
-	);
 }
 
-FTileData ATileWorldGenerator::GenerateTile(int32 X, int32 Y, const FVector2D& NoiseOffset, const FVector2D& WarpOffset)
+void ATileWorldGenerator::GenerateTile(int32 X, int32 Y, const FVector2D& NoiseOffset, const FVector2D& WarpOffset)
 {
-	FTileData Result {.TileCoordinate = FIntPoint(X, Y), .bIsOccupied = false};
-
 	auto NoiseContext = GenerateTileNoise(X, Y, NoiseOffset, WarpOffset);
 
+	FTileMutationHelper TileMutation;
+	// TODO Mutation: Actual phases and reasons
+	auto MutationContext = FTileMutationContext::Make({X, Y}, ETileMutationSource::WorldGeneration, nullptr, this, TEXT("Base World Generation"), TEXT("Tile Generation"));
 	if (NoiseContext.Height <= WaterLevel)
 	{
-		Result.Type = ETileType::Water;
-		Result.Moisture = 100;
-		return Result;
+		TileMutation.SetType(ETileType::Water);
+		TileMutation.SetMoisture(100);
+		TileMutation.SetBiomeTypeData(GetWaterBiomeData());
+		MutationContext.BiomeType = GetWaterBiomeData();
+		DataGrid->MutateTile(MutationContext, TileMutation);
+
+		// TODO
+		//WaterBiome->FillRuntimeTileData(Result, NoiseContext.Height, NoiseContext.Moisture);
+		return;
 	}
 	
 	auto FinalBiome = GenerateBiomeData(X, Y, NoiseContext);
-	Result.BiomeData = FinalBiome;
 	
 	const auto RulesSet = FinalBiome && FinalBiome->TilesGenerationRuleSet ? FinalBiome->TilesGenerationRuleSet : DefaultTileGenerationRuleSet;
 	auto TileType = RulesSet->ResolveTileType(NoiseContext);
 	
-	// const auto BorderFactor = GetBiomeBorderFactor(NoiseContext.Height, NoiseContext.Moisture, FinalBiome);
-	// if (FinalBiome && BorderFactor > 0.f)
-	// {
-	// 	const auto BorderNoise = GetBiomeBorderNoise(X, Y);
-	// 	if (BorderNoise < BorderFactor * BiomeBorderStrength) TileType = FinalBiome->ResolveBorderTile(NoiseContext.Height, TileType, WaterLevel);
-	// }
-	//
-	// if (FinalBiome && FinalBiome->IsShore(NoiseContext.Height)) TileType = FinalBiome->ShoreTile;
-
-	if (FinalBiome)
-	{
-		Result.SmoothingOverride = FinalBiome->ResolveSmoothingOverride(TileType);
-		FinalBiome->FillRuntimeTileData(Result, NoiseContext.Height, NoiseContext.Moisture);
-	}
-	else
-	{
-		Result.SmoothingOverride = ETileType::ETileType_MAX;
-	}
-	Result.Fertility = FinalBiome->BaseFertility;
-	Result.Moisture  = FMath::RoundToInt(NoiseContext.Moisture * 100.f);
-	Result.Type = TileType;
+	TileMutation.SetBiomeTypeData(FinalBiome);
+	TileMutation.SetFertility(FinalBiome->BaseFertility);
+	TileMutation.SetMoisture(FMath::RoundToInt(NoiseContext.Moisture * 100.f));
+	TileMutation.SetType(TileType);
 	
-	return Result;
+	MutationContext.BiomeType = FinalBiome;
+	DataGrid->MutateTile(MutationContext, TileMutation);
 }
 
-float ATileWorldGenerator::GetBiomeBorderFactor(float Height, float Moisture, const UBiomeTypeData* Biome)
+void ATileWorldGenerator::VisualizeChunk(int32 ChunkX, int32 ChunkY)
 {
-	const auto DH = DistanceToRange(Height, Biome->HeightRange);
-	const auto DM = DistanceToRange(Moisture, Biome->MoistureRange);
+	TMap<FTileVisualKey, FTileInstancesBatch> Batched;
+	
+	const auto EndX   = FMath::Min(ChunkX + ChunkSize, GridSizeX);
+	const auto EndY   = FMath::Min(ChunkY + ChunkSize, GridSizeY);
 
-	const auto MinDist = FMath::Min(DH, DM);
+	for (auto X = ChunkX; X < EndX; X++)
+	{
+		for (auto Y = ChunkY; Y < EndY; Y++)
+		{
+			const auto& Tile = DataGrid->GetTileChecked(X, Y);
 
-	return FMath::Clamp(
-		1.f - (MinDist / BiomeBorderWidth),
-		0.f,
-		1.f
+			const auto ResolvedKey =
+				FTileNeighborResolver::Resolve(Tile->GetType(), Tile->GetNeighborMask());
+
+			FVector LocalPos(
+				(X - ChunkX) * GridTileSize,
+				(Y - ChunkY) * GridTileSize,
+				0.f
+			);
+
+			Batched.FindOrAdd(ResolvedKey).Transforms.Emplace(
+				FRotator(0.f, ResolvedKey.Rotation, 0.f),
+				LocalPos,
+				FVector::OneVector
+			);
+
+			Batched.FindOrAdd(ResolvedKey).Coordinates.Emplace( FIntPoint(X, Y) );
+		}
+	}
+
+	TileGrid->CreateChunk(
+		FIntPoint(ChunkX / ChunkSize, ChunkY / ChunkSize),
+		Batched
 	);
 }
 
-float ATileWorldGenerator::GetBiomeBorderNoise(int32 X, int32 Y)
+UBiomeTypeData* ATileWorldGenerator::GetWaterBiomeData()
 {
-	const auto NX = X * BiomeBorderNoiseScale;
-	const auto NY = Y * BiomeBorderNoiseScale;
-
-	return (FMath::PerlinNoise2D({ NX, NY }) + 1.f) * 0.5f;
-}
-
-void ATileWorldGenerator::ApplySmoothing()
-{
-	ApplyWaterEdgeSmoothing();
-	// TODO Move to biome ???
-	ApplyBiomeSmoothing();
-	ApplyTileSmoothing();
-}
-
-void ATileWorldGenerator::ApplyWaterEdgeSmoothing()
-{
-	for (auto X = 0; X < GridSizeX; X++)
-	{
-		for (auto Y = 0; Y < GridSizeY; Y++)
-		{
-			auto Tile = LogicalGrid->GetTileChecked(X, Y);
-
-			if (Tile->Type == ETileType::Water) continue;
-
-			if (LogicalGrid->HasNeighborOfType(X, Y, ETileType::Water))
-			{
-				Tile->Type = ETileType::Sand;
-			}
-		}
-	}
-}
-
-void ATileWorldGenerator::ApplyTileSmoothing()
-{
-	TArray<FIntPoint> ToChange;
-
-	for (auto X = 0; X < GridSizeX; X++)
-	{
-		for (auto Y = 0; Y < GridSizeY; Y++)
-		{
-			const auto TileData = LogicalGrid->GetTileChecked(X, Y);
-			const auto TileType = TileData->Type;
-
-			auto Same = 0;
-			auto Total = 0;
-
-			TArray<FIntPoint> Offsets = { {1,0}, {-1,0}, {0,1}, {0,-1} };
-			for (const auto& Offset :  Offsets)
-			{
-				const auto& OffsetTile = LogicalGrid->GetTileChecked(X + Offset.X, Y + Offset.Y);
-				if (!OffsetTile) continue;
-				Total++;
-				if (OffsetTile->Type == TileType) Same++;
-			}
-			
-			if (Same <= 1 && TileData->SmoothingOverride != ETileType::ETileType_MAX)
-			{
-				LogicalGrid->SetTileType(X, Y, TileData->SmoothingOverride);
-				auto ReplacementType = TileData->SmoothingOverride;
-				ToChange.Add({ X, Y });
-				LogicalGrid->SetTileType(X, Y, ReplacementType);
-			}
-		}
-	}
-}
-
-void ATileWorldGenerator::ApplyBiomeSmoothing()
-{
-	for (auto X = 1; X < GridSizeX - 1; X++)
-	{
-		for (auto Y = 1; Y < GridSizeY - 1; Y++)
-		{
-			const auto Tile = LogicalGrid->GetTileChecked(X, Y);
-			const auto BiomeTypeData = Tile->BiomeData;
-			if (!BiomeTypeData) continue;
-
-			auto bNearDifferentBiome = false;
-
-			for (const auto& Offset : { FIntPoint(1,0), {-1,0}, {0,1}, {0,-1} })
-			{
-				const auto OffsetTile = LogicalGrid->GetTileChecked(X + Offset.X, Y + Offset.Y);
-				
-				if (OffsetTile->BiomeData && OffsetTile->BiomeData->BiomeType != BiomeTypeData->BiomeType)
-				{
-					bNearDifferentBiome = true;
-					break;
-				}
-			}
-
-			if (!bNearDifferentBiome) continue;
-			
-			switch (BiomeTypeData->BiomeType)
-			{
-				case EBiomeType::Forest:
-					if (Tile->Type == ETileType::Rock) Tile->Type = ETileType::Dirt;
-					break;
-
-				case EBiomeType::Plains:
-					if (Tile->Type == ETileType::Grass) Tile->Type = ETileType::Dirt;
-					break;
-
-				case EBiomeType::Desert:
-					Tile->Type = ETileType::Sand;
-					break;
-
-				default:
-					break;
-			}
-		}
-	}
+	for (const auto BiomeData : BiomeDataSet->BiomeData) if (BiomeData->BiomeType == EBiomeType::Water) return BiomeData;
+	return nullptr;
 }
 
 STileNoiseContext ATileWorldGenerator::GenerateTileNoise(int32 X, int32 Y, const FVector2D& NoiseOffset, const FVector2D& WarpOffset)
@@ -326,12 +216,4 @@ float ATileWorldGenerator::GetSecondaryNoise(int32 X, int32 Y)
 
 	const auto Noise = FMath::PerlinNoise2D({ SX, SY });
 	return (Noise + 1.f) * 0.5f * SecondaryNoiseStrength; // 0..1
-}
-
-float ATileWorldGenerator::DistanceToRange(float InValue, const FVector2D& Range)
-{
-	return FMath::Min(
-		FMath::Abs(InValue - Range.X),
-		FMath::Abs(Range.Y - InValue)
-	);
 }

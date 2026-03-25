@@ -1,12 +1,17 @@
 {
 	"FileVersion": 3,
-	"EngineAssociation": "5.5",
+	"EngineAssociation": "5.7",
 	"Category": "",
 	"Description": "",
 	"Modules": [
 		{
 			"Name": "ChillFarmGame",
 			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		},
+		{
+			"Name": "ChillFarmGameEditor",
+			"Type": "Editor",
 			"LoadingPhase": "Default"
 		}
 	]

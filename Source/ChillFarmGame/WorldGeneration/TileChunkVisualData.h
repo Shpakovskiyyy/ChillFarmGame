@@ -1,12 +1,12 @@
 ﻿#pragma once
 
 #include "TileVisualKey.h"
-#include "TileChunkVisualRepresentation.generated.h"
+#include "TileChunkVisualData.generated.h"
 
 class UHierarchicalInstancedStaticMeshComponent;
 
 USTRUCT()
-struct FTileChunkVisualRepresentation
+struct FTileChunkVisualData
 {
 	GENERATED_BODY()
 	

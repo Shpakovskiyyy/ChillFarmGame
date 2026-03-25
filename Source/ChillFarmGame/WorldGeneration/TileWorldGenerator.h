@@ -7,9 +7,10 @@
 #include "GameFramework/Actor.h"
 #include "TileWorldGenerator.generated.h"
 
+class UTileWorldPostProcessor;
 class UTilesGenerationRuleSet;
 class UTileDataGrid;
-class ATileGrid;
+class ATileVisualGrid;
 class UBiomeTypeData;
 class UBiomeTypeDataSet;
 
@@ -37,25 +38,15 @@ public:
 
 protected:
 	void ProcessChunk(int32 StartX, int32 StartY, const FVector2D& NoiseOffset, const FVector2D& WarpOffset);
+	void GenerateTile(int32 X, int32 Y, const FVector2D& NoiseOffset, const FVector2D& WarpOffset);
 
 protected:
-	FTileData GenerateTile(int32 X, int32 Y, const FVector2D& NoiseOffset, const FVector2D& WarpOffset);
-
-	// Returns float in range [0-1], where 0 is tile that is deep in the biome and 1 is nearly border.
-	float GetBiomeBorderFactor(float Height, float Moisture, const UBiomeTypeData* Biome);
-	float GetBiomeBorderNoise(int32 X, int32 Y);
+	void VisualizeChunk(int32 ChunkX, int32 ChunkY);
 
 protected:
-	void ApplySmoothing();
-	void ApplyWaterEdgeSmoothing();
-	void ApplyTileSmoothing();
-	void ApplyBiomeSmoothing();
-
-protected:
+	UBiomeTypeData* GetWaterBiomeData();
 	STileNoiseContext GenerateTileNoise(int32 X, int32 Y, const FVector2D& NoiseOffset, const FVector2D& WarpOffset);
 	UBiomeTypeData* GenerateBiomeData(int32 InX, int32 InY, const STileNoiseContext& NoiseContext);
-	
-protected:
 	float GetSecondaryNoise(int32 X, int32 Y);
 
 private:
@@ -133,10 +124,13 @@ protected:
 
 private:
 	UPROPERTY()
-	UTileDataGrid* LogicalGrid;
+	UTileDataGrid* DataGrid = nullptr;
+
+	UPROPERTY()
+	UTileWorldPostProcessor* PostProcessor = nullptr;
 	
 	UPROPERTY()
-	ATileGrid* TileGrid = nullptr;
+	ATileVisualGrid* TileGrid = nullptr;
 
 private:
 	FOnTerrainGenerated OnTerrainGenerated;

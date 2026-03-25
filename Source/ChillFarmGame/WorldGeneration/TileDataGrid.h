@@ -4,6 +4,7 @@
 #include "UObject/Object.h"
 
 #include "TileData.h"
+#include "TileMutationHistory/TileMutationContext.h"
 
 #include "TileDataGrid.generated.h"
 
@@ -19,8 +20,8 @@ public:
 	void ClearAllChunks();
 
 public:
-	FTileData* GetTileChecked(int32 InX, int32 InY);
-	FTileData* GetTileChecked(const FIntPoint& InCoordinate);
+	const FTileData* const GetTileChecked(int32 InX, int32 InY);
+	const FTileData* const GetTileChecked(const FIntPoint& InCoordinate);
 
 	FIntPoint GetSize() const;
 
@@ -39,11 +40,13 @@ public:
 	FVector TileToWorld(int32 InX, int32 InY) const;
 
 public:
-	void SetTile(int32 InX, int32 InY, const FTileData& InTileData);
-	void SetTileType(int32 InX, int32 InY, ETileType InNewType);
-	void SetOccupiedTile(int32 InX, int32 InY, bool bInIsOccupied);
+	void MutateTile(const FTileMutationContext& MutationContext, const FTileMutationHelper& Mutation); 
 
-	private:
+private:
+	void RecordHistory(const FTileMutationContext& InContext, const FTileData& Before, const FTileData& After);
+
+private:
+	FTileData& GetTileMutableChecked(int32 InX, int32 InY);
 	int32 ToIndex(int32 InX, int32 InY) const;
 
 private:

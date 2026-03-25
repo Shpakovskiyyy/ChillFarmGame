@@ -40,7 +40,7 @@ public:
 	
 };
 
-inline SResolvedBiomeBlend UBiomeTypeDataSet::ResolveBiomeBlend(float Height, float Moisture) const
+FORCEINLINE SResolvedBiomeBlend UBiomeTypeDataSet::ResolveBiomeBlend(float Height, float Moisture) const
 {
 	SResolvedBiomeBlend Result;
 
@@ -51,10 +51,10 @@ inline SResolvedBiomeBlend UBiomeTypeDataSet::ResolveBiomeBlend(float Height, fl
 	{
 		if (!Biome) continue;
 
-		const auto DH = DistanceToRange(Height, Biome->HeightRange);
-		const auto DM = DistanceToRange(Moisture, Biome->MoistureRange);
+		const auto HeightDistance = DistanceToRange(Height, Biome->HeightRange);
+		const auto MoistureDistance = DistanceToRange(Moisture, Biome->MoistureRange);
 
-		const auto Score = DH + DM;
+		const auto Score = HeightDistance + MoistureDistance;
 
 		if (Score < BestScore)
 		{
@@ -76,6 +76,6 @@ inline SResolvedBiomeBlend UBiomeTypeDataSet::ResolveBiomeBlend(float Height, fl
 		0.f,
 		1.f
 	);
-
+	
 	return Result;
 }
