@@ -527,9 +527,10 @@ void FTileGenerationSpec::Define()
 			TestEq(*this, TEXT("Rock speck removed"), Grid.GetTile(FIntPoint(2, 2)).Type, ETileType::Grass);
 		});
 
-		It("uses the biome's override when it has one", [this]()
+		It("uses the biome's override when a neighbour has that type", [this]()
 		{
-			FTileGrid Grid = MakeGrid({ TEXT("GGG"), TEXT("GRG"), TEXT("GGG") });
+			// Grass is the most common neighbour, but the override picks the dirt next to the rock.
+			FTileGrid Grid = MakeGrid({ TEXT("GGG"), TEXT("GRD"), TEXT("GGG") });
 			UBiomeTypeData* Plains = MakeBiome(EBiomeType::Plains, FVector2D(0.0, 1.0), FVector2D(0.0, 1.0));
 			Plains->SmoothingOverrides.Add(ETileType::Rock, ETileType::Dirt);
 
@@ -538,6 +539,20 @@ void FTileGenerationSpec::Define()
 
 			NewObject<UTileSmoothingPass>()->Execute(Context);
 			TestEq(*this, TEXT("Override"), Grid.GetTile(FIntPoint(1, 1)).Type, ETileType::Dirt);
+		});
+
+		It("ignores the override when no neighbour has that type", [this]()
+		{
+			// The seed 5 case: lone grass in a sand field with a Grass -> Dirt override used to become lone dirt.
+			FTileGrid Grid = MakeGrid({ TEXT("SSS"), TEXT("SGS"), TEXT("SSS") });
+			UBiomeTypeData* Plains = MakeBiome(EBiomeType::Plains, FVector2D(0.0, 1.0), FVector2D(0.0, 1.0));
+			Plains->SmoothingOverrides.Add(ETileType::Grass, ETileType::Dirt);
+
+			FTileGenerationContext Context(Grid, 1);
+			Context.Biomes = MakeBiomeSet({ Plains });
+
+			NewObject<UTileSmoothingPass>()->Execute(Context);
+			TestEq(*this, TEXT("Most common neighbour"), Grid.GetTile(FIntPoint(1, 1)).Type, ETileType::Sand);
 		});
 
 		It("keeps strips, shores and water", [this]()

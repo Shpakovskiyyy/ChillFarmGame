@@ -227,8 +227,11 @@ void UTileSmoothingPass::Execute(FTileGenerationContext& Context) const
 
 		ETileType Replacement = ETileType::ETileType_MAX;
 
+		// The biome's override is a preference, not a command: it only wins when a neighbour already has
+		// that type. Otherwise a lone tile would become a lone tile of another type, which is still an island.
 		const UBiomeTypeData* Biome = FindBiome(Context, Data.Biome);
-		if (const ETileType* Override = Biome ? Biome->SmoothingOverrides.Find(Data.Type) : nullptr)
+		const ETileType* Override = Biome ? Biome->SmoothingOverrides.Find(Data.Type) : nullptr;
+		if (Override && *Override < ETileType::ETileType_MAX && TypeCounts[static_cast<int32>(*Override)] > 0)
 		{
 			Replacement = *Override;
 		}
