@@ -26,6 +26,7 @@ namespace TileTestUtils
 	inline FString ToTestString(uint8 InValue) { return FString::FromInt(InValue); }
 	inline FString ToTestString(bool bInValue) { return bInValue ? TEXT("true") : TEXT("false"); }
 	inline FString ToTestString(const FString& InValue) { return InValue; }
+	inline FString ToTestString(const FName& InValue) { return InValue.ToString(); }
 	inline FString ToTestString(const FIntPoint& InValue) { return FString::Printf(TEXT("(%d, %d)"), InValue.X, InValue.Y); }
 
 	inline FString ToTestString(ETileField InFields)

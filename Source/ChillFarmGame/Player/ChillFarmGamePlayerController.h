@@ -8,8 +8,6 @@
 class UNiagaraSystem;
 class UInputMappingContext;
 class UInputAction;
-struct FTileMutation;
-struct FTileData;
 
 DECLARE_LOG_CATEGORY_EXTERN(LogCFGPlayerController, Log, All);
 
@@ -59,12 +57,6 @@ protected:
 
 	/** Input handler for UseTool: finds the tile under the cursor and applies the tool to it. */
 	void OnUseTool();
-
-	/**
-	 * What the tool does to a tile. Returns false when it does nothing there.
-	 * OutStep names the action for the tile history ("Till", "Water").
-	 */
-	bool MakeToolMutation(const FTileData& InTile, FTileMutation& OutMutation, FName& OutStep) const;
 
 private:
 	FVector CachedDestination;

@@ -8,6 +8,7 @@ public class ChillFarmGame : ModuleRules
 
 		PublicIncludePaths.AddRange(new string[] {
 			"ChillFarmGame/Crops",
+			"ChillFarmGame/Farming",
 			"ChillFarmGame/Interfaces",
 			"ChillFarmGame/Persistent",
 			"ChillFarmGame/Player",

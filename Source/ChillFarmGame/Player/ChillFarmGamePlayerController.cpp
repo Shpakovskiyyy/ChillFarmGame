@@ -10,6 +10,7 @@
 #include "NiagaraFunctionLibrary.h"
 #include "Blueprint/AIBlueprintHelperLibrary.h"
 
+#include "TileFarming.h"
 #include "TileMutation.h"
 #include "TileWorldSubsystem.h"
 
@@ -119,16 +120,7 @@ void AChillFarmGamePlayerController::OnUseTool()
 	FTileChangeContext Context;
 	Context.Source = ETileMutationSource::Gameplay;
 	Context.Instigator = this;
-	if (!MakeToolMutation(*Tile, Mutation, Context.Step)) return;
+	if (!TileFarming::MakeToolMutation(*Tile, Mutation, Context.Step)) return;
 
 	TileWorld->MutateTile(Target, Mutation, Context);
-}
-
-bool AChillFarmGamePlayerController::MakeToolMutation(const FTileData& InTile, FTileMutation& OutMutation, FName& OutStep) const
-{
-	// TODO(Yevhen): call the TileFarming rules here (card #18, step 1):
-	//   if (TileFarming::CanTill(InTile))  { OutMutation = TileFarming::MakeTill(InTile);  OutStep = TEXT("Till");  return true; }
-	//   if (TileFarming::CanWater(InTile)) { OutMutation = TileFarming::MakeWater(InTile); OutStep = TEXT("Water"); return true; }
-	UE_LOG(LogCFGPlayerController, Display, TEXT("Use tool on a %s tile: no farming rules yet"), *UEnum::GetDisplayValueAsText(InTile.Type).ToString());
-	return false;
 }
