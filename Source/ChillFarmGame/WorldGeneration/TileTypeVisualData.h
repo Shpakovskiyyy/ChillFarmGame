@@ -20,6 +20,10 @@ class CHILLFARMGAME_API UTileTypeVisualData : public UPrimaryDataAsset
 public:
 	const FTileTypeVisualVariant* FindVisualVariant(const FTileVisualKey& Key) const;
 
+	// Same as FindVisualVariant, but never leaves a tile without a mesh while the asset has at least one:
+	// exact position first, then Center, then Isolated, then the first variant that has a mesh.
+	const FTileTypeVisualVariant* FindVisualVariantOrFallback(const FTileVisualKey& Key) const;
+
 public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	ETileType TileType = ETileType::ETileType_MAX;
@@ -46,6 +50,28 @@ inline const FTileTypeVisualVariant* UTileTypeVisualData::FindVisualVariant(cons
 		{
 			return &Variant;
 		}
+	}
+	return nullptr;
+}
+
+inline const FTileTypeVisualVariant* UTileTypeVisualData::FindVisualVariantOrFallback(const FTileVisualKey& Key) const
+{
+	const auto FindWithMesh = [this](ETileVisualPositionType Position) -> const FTileTypeVisualVariant*
+	{
+		for (const auto& Variant : VisualsVariants)
+		{
+			if (Variant.VisualType == Position && Variant.Mesh) return &Variant;
+		}
+		return nullptr;
+	};
+
+	if (const auto* Exact = FindWithMesh(Key.VisualPositionType)) return Exact;
+	if (const auto* Center = FindWithMesh(ETileVisualPositionType::Center)) return Center;
+	if (const auto* Isolated = FindWithMesh(ETileVisualPositionType::Isolated)) return Isolated;
+
+	for (const auto& Variant : VisualsVariants)
+	{
+		if (Variant.Mesh) return &Variant;
 	}
 	return nullptr;
 }

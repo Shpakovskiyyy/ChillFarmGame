@@ -1,23 +1,27 @@
 ﻿#pragma once
 
 #include "CoreMinimal.h"
-#include "TileData.h"
-#include "TileNoiseContext.h"
-#include "TileVisualKey.h"
 #include "GameFramework/Actor.h"
+#include "TileGridLayout.h"
 #include "TileWorldGenerator.generated.h"
 
-class UTileWorldPostProcessor;
-class UTilesGenerationRuleSet;
-class UTileDataGrid;
 class ATileVisualGrid;
-class UBiomeTypeData;
+class FTileGrid;
 class UBiomeTypeDataSet;
+class UTileGenerationPass;
+class UTilesGenerationRuleSet;
+class UTileWorldSubsystem;
 
 DECLARE_LOG_CATEGORY_EXTERN(LogTileWorldGenerator, Log, All);
 
 DECLARE_MULTICAST_DELEGATE(FOnTerrainGenerated);
 
+
+// Builds the tile map of the level from a seed.
+//
+// GenerateWorld runs the passes below in order on a fresh grid, hands the result to the world's
+// UTileWorldSubsystem and asks the ATileVisualGrid to draw it. The same seed and settings always
+// give the same map.
 UCLASS()
 class CHILLFARMGAME_API ATileWorldGenerator : public AActor
 {
@@ -27,112 +31,68 @@ public:
 	ATileWorldGenerator();
 
 public:
-	UFUNCTION(CallInEditor, BlueprintCallable, Category = "Generation Settings | Generation")
+	UFUNCTION(CallInEditor, BlueprintCallable, Category = "Generation")
 	void GenerateWorld();
 
-	UFUNCTION(CallInEditor, BlueprintCallable, Category = "Generation Settings | Generation")
+	UFUNCTION(CallInEditor, BlueprintCallable, Category = "Generation")
 	void CleanGeneratedWorld();
 
 public:
-	FOnTerrainGenerated& GetOnTerrainGenerated();
+	FOnTerrainGenerated& GetOnTerrainGenerated() { return OnTerrainGenerated; }
 
-protected:
-	void ProcessChunk(int32 StartX, int32 StartY, const FVector2D& NoiseOffset, const FVector2D& WarpOffset);
-	void GenerateTile(int32 X, int32 Y, const FVector2D& NoiseOffset, const FVector2D& WarpOffset);
+	// The layout the next generation will use.
+	FTileGridLayout MakeLayout() const;
 
-protected:
-	void VisualizeChunk(int32 ChunkX, int32 ChunkY);
-
-protected:
-	UBiomeTypeData* GetWaterBiomeData();
-	STileNoiseContext GenerateTileNoise(int32 X, int32 Y, const FVector2D& NoiseOffset, const FVector2D& WarpOffset);
-	UBiomeTypeData* GenerateBiomeData(int32 InX, int32 InY, const STileNoiseContext& NoiseContext);
-	float GetSecondaryNoise(int32 X, int32 Y);
+	// Regenerate when the level is opened in the editor (the map itself is not saved, only the seed).
+	bool ShouldGenerateOnEditorLoad() const { return bGenerateWhenLevelOpens; }
 
 private:
-	// TODO Maybe move to some utility
-	float DistanceToRange(float InValue, const FVector2D& Range);
+	ATileVisualGrid* FindVisualGrid();
 
 protected:
-	/* Grid settings */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Generation Settings | Grid Settings")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Generation")
 	int32 WorldSeed = 1;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Generation Settings | Grid Settings")
-	int32 ChunkSize = 64;
+	// Regenerate automatically when this level is opened in the editor.
+	UPROPERTY(EditAnywhere, Category = "Generation")
+	bool bGenerateWhenLevelOpens = true;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Generation Settings | Grid Settings")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid", meta = (ClampMin = "1", ClampMax = "2048"))
 	int32 GridSizeX = 128;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Generation Settings | Grid Settings")
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid", meta = (ClampMin = "1", ClampMax = "2048"))
 	int32 GridSizeY = 128;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Generation Settings | Grid Settings")
+	// Edge length of one tile in world units.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid", meta = (ClampMin = "1"))
 	float GridTileSize = 100.f;
 
-	UPROPERTY(VisibleAnywhere, BlueprintReadWrite, Category = "Generation Settings | Grid Settings")
-	int32 DefaultTileMeshSize = 100;
+	// World height of one elevation level.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid", meta = (ClampMin = "1"))
+	float LevelHeight = 100.f;
 
-	UPROPERTY(EditDefaultsOnly)
-	float BiomeBorderWidth = 0.08f;
+	// World position of the outer corner of tile (0, 0).
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid")
+	FVector GridOrigin = FVector::ZeroVector;
 
-	UPROPERTY(EditDefaultsOnly)
-	float BiomeBorderNoiseScale = 0.12f;
+	// Tiles per side of one visual chunk. Smaller chunks redraw faster after a change, larger ones mean fewer components.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid", meta = (ClampMin = "8", ClampMax = "256"))
+	int32 ChunkSize = 64;
 
-	UPROPERTY(EditDefaultsOnly)
-	float BiomeBorderStrength = 0.3f;
-	/* Grid settings */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Data")
+	UBiomeTypeDataSet* BiomeDataSet = nullptr;
 
-protected:
-	/* Noise Settings */
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Generation Settings | Noise Settings")
-	float NoiseScale = 0.025f; // Perlin sampling scale
+	// Used for biomes that have no rule set of their own.
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Data")
+	UTilesGenerationRuleSet* DefaultTileGenerationRuleSet = nullptr;
 
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Generation Settings | Noise Settings")
-	float HeightNoiseScale = 0.005f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Generation Settings | Noise Settings")
-	float MoistureNoiseScale = 0.005f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Generation Settings | Noise Settings")
-	float SecondaryNoiseScale = 0.15f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Generation Settings | Noise Settings")
-	float SecondaryNoiseStrength = 0.25f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Generation Settings | Noise Settings")
-	float WarpStrength = 0.1f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Generation Settings | Noise Settings")
-	float NoiseOffsetRange = 1000.f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Generation Settings | Noise Settings")
-	float WarpOffsetRange = 2000.f;
-	/* Noise Settings */
-
-protected:
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Generation Settings | World Generation Settings")
-	float WaterLevel = 0.3f;
-
-protected:
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Generation Settings | World Generation")
-	UTilesGenerationRuleSet* DefaultTileGenerationRuleSet;
-
-protected:
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Generation Settings | World Generation")
-	UBiomeTypeDataSet* BiomeDataSet;
+	// Run in order. Each pass builds on the results of the ones before it.
+	UPROPERTY(EditAnywhere, Instanced, Category = "Passes")
+	TArray<TObjectPtr<UTileGenerationPass>> Passes;
 
 private:
-	UPROPERTY()
-	UTileDataGrid* DataGrid = nullptr;
+	UPROPERTY(Transient)
+	TObjectPtr<ATileVisualGrid> VisualGrid = nullptr;
 
-	UPROPERTY()
-	UTileWorldPostProcessor* PostProcessor = nullptr;
-	
-	UPROPERTY()
-	ATileVisualGrid* TileGrid = nullptr;
-
-private:
 	FOnTerrainGenerated OnTerrainGenerated;
-	
 };

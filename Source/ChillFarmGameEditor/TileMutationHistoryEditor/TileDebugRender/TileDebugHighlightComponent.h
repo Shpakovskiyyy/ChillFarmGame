@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "CoreMinimal.h"
 #include "Components/PrimitiveComponent.h"
@@ -8,6 +8,7 @@
 #include "TileDebugHighlightComponent.generated.h"
 
 
+// Editor-only primitive that draws wire boxes over tiles through FTileDebugSceneProxy.
 UCLASS()
 class UTileDebugHighlightComponent : public UPrimitiveComponent
 {
@@ -17,8 +18,7 @@ public:
 	UTileDebugHighlightComponent();
 
 public:
-	void AddHighlightedTiles(const TArray<FTileDebugDrawTile>& InTiles);
-	void AddHighlightedTile(int32 InSelectedTileIndex);
+	void SetTiles(const TArray<FTileDebugDrawTile>& InTiles);
 
 	// UPrimitiveComponent
 	virtual FPrimitiveSceneProxy* CreateSceneProxy() override;
@@ -26,6 +26,4 @@ public:
 
 private:
 	TArray<FTileDebugDrawTile> Tiles;
-	int32 SelectedTileIndex = INDEX_NONE;
-	
 };

@@ -26,9 +26,7 @@ protected:
 	void OnGenerateWorld();
 	bool CanGenerateWorld();
 
-protected:
-	inline static const FName TileInspectorTabName = TEXT("Tile Inspector");
-	
-};
+	// The generated map is not saved with the level, so regenerate it from the seed when a level opens.
+	void HandleMapOpened(const FString& InFilename, bool bAsTemplate);
 
-IMPLEMENT_MODULE(FChillFarmGameEditorModule, ChillFarmGameEditor);
+};

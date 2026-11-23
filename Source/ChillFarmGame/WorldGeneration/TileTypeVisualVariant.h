@@ -14,15 +14,15 @@ struct FTileTypeVisualVariant
 	GENERATED_BODY()
 
 	UPROPERTY(EditAnywhere)
-	ETileVisualPositionType VisualType;
+	ETileVisualPositionType VisualType = ETileVisualPositionType::Center;
 
 	UPROPERTY(EditAnywhere)
-	uint32 Rotation;
+	uint32 Rotation = 0;
 
 	UPROPERTY(EditAnywhere)
-	UStaticMesh* Mesh;
+	UStaticMesh* Mesh = nullptr;
 
 	UPROPERTY(EditAnywhere)
-	UMaterialInterface* Material;
+	UMaterialInterface* Material = nullptr;
 	
 };

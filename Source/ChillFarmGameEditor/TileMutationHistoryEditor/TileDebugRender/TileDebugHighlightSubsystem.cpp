@@ -1,41 +1,41 @@
-﻿#include "TileDebugRender/TileDebugHighlightSubsystem.h"
+#include "TileDebugRender/TileDebugHighlightSubsystem.h"
 #include "TileDebugRender/TileDebugHighlightComponent.h"
 
-#include "Editor.h"
 #include "Engine/World.h"
 
 
-void UTileDebugHighlightSubsystem::Initialize(FSubsystemCollectionBase& Collection)
-{
-	Super::Initialize(Collection);
-	FEditorDelegates::OnMapOpened.AddUObject(this, &UTileDebugHighlightSubsystem::HandleOnMapOpened);
-}
-
 bool UTileDebugHighlightSubsystem::ShouldCreateSubsystem(UObject* Outer) const
 {
-	return Outer && Outer->GetWorld() && Outer->GetWorld()->IsEditorWorld();
+	const UWorld* World = Outer ? Outer->GetWorld() : nullptr;
+	return World && World->IsEditorWorld() && !World->IsGameWorld();
 }
 
-void UTileDebugHighlightSubsystem::UpdateTiles(const TArray<FTileDebugDrawTile>& InTiles)
+void UTileDebugHighlightSubsystem::Deinitialize()
 {
-	RenderComponent->AddHighlightedTiles(InTiles);
+	if (RenderComponent && RenderComponent->IsRegistered()) RenderComponent->UnregisterComponent();
+	RenderComponent = nullptr;
+	Super::Deinitialize();
 }
 
-void UTileDebugHighlightSubsystem::SetSelectedTile(int32 InSelectedTileIndex)
+void UTileDebugHighlightSubsystem::SetTiles(const TArray<FTileDebugDrawTile>& InTiles)
 {
-	RenderComponent->AddHighlightedTile(InSelectedTileIndex);
+	if (UTileDebugHighlightComponent* Component = GetOrCreateRenderComponent())
+	{
+		Component->SetTiles(InTiles);
+	}
 }
 
-void UTileDebugHighlightSubsystem::HandleOnMapOpened(const FString&, bool)
+UTileDebugHighlightComponent* UTileDebugHighlightSubsystem::GetOrCreateRenderComponent()
 {
-	auto World = GEditor->GetEditorWorldContext().World();
-	check(World);
+	if (RenderComponent) return RenderComponent;
 
-	DummyActor = World->SpawnActor<AActor>();
-	DummyActor->SetFlags(RF_Transient);
-	DummyActor->SetActorHiddenInGame(false);
+	UWorld* World = GetWorld();
+	if (!World) return nullptr;
 
-	RenderComponent = NewObject<UTileDebugHighlightComponent>(DummyActor);
-	RenderComponent->RegisterComponent();
-	DummyActor->SetRootComponent(RenderComponent);
+	// Created on first use in this subsystem's own world, and registered without an owning actor:
+	// nothing appears in the outliner and nothing is saved with the level. It used to be spawned on
+	// OnMapOpened into whatever world the editor had, which left new unsaved levels without one.
+	RenderComponent = NewObject<UTileDebugHighlightComponent>(this, NAME_None, RF_Transient);
+	RenderComponent->RegisterComponentWithWorld(World);
+	return RenderComponent;
 }

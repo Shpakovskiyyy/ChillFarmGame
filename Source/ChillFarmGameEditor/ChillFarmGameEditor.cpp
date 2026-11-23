@@ -15,6 +15,10 @@
 
 DEFINE_LOG_CATEGORY(LogChillFarmGameEditor)
 
+// Lives in the .cpp on purpose: the macro defines functions, so having it in the header breaks the
+// build with duplicate symbols as soon as a second file includes ChillFarmGameEditor.h.
+IMPLEMENT_MODULE(FChillFarmGameEditorModule, ChillFarmGameEditor);
+
 
 void FChillFarmGameEditorModule::StartupModule()
 {
@@ -26,6 +30,8 @@ void FChillFarmGameEditorModule::StartupModule()
 	UToolMenus::RegisterStartupCallback(FSimpleMulticastDelegate::FDelegate::CreateRaw(
 		this, &FChillFarmGameEditorModule::RegisterMenus)
 	);
+
+	FEditorDelegates::OnMapOpened.AddRaw(this, &FChillFarmGameEditorModule::HandleMapOpened);
 }
 
 void FChillFarmGameEditorModule::ShutdownModule()
@@ -33,6 +39,7 @@ void FChillFarmGameEditorModule::ShutdownModule()
 	IModuleInterface::ShutdownModule();
 	UE_LOG(LogChillFarmGameEditor, Log, TEXT("Shutting down ChillFarmGameEditor module..."))
 
+	FEditorDelegates::OnMapOpened.RemoveAll(this);
 	UToolMenus::UnRegisterStartupCallback(this);
 	UToolMenus::UnregisterOwner(this);
 	UnregisterTabSpawner();
@@ -46,19 +53,19 @@ void FChillFarmGameEditorModule::RegisterMenus()
 	auto Menu = UToolMenus::Get()->ExtendMenu("LevelEditor.MainMenu.Window");
 
 	FToolMenuSection& Section = Menu->AddSection(
-		TileInspectorTabName,
+		STileInspectorWindow::TabName,
 		FText::FromString("Tile Tools")
 	);
 
 	Section.AddMenuEntry(
 		"OpenTileInspector",
-		FText::FromName(TileInspectorTabName),
+		FText::FromName(STileInspectorWindow::TabName),
 		FText::FromString("Open Tile Inspector Window"),
 		FSlateIcon(),
 		FUIAction(
 			FExecuteAction::CreateLambda([]
 			{
-				FGlobalTabmanager::Get()->TryInvokeTab(TileInspectorTabName);
+				FGlobalTabmanager::Get()->TryInvokeTab(STileInspectorWindow::TabName);
 			})
 		)
 	);
@@ -81,7 +88,7 @@ void FChillFarmGameEditorModule::RegisterMenus()
 void FChillFarmGameEditorModule::RegisterTabSpawner()
 {
 	FGlobalTabmanager::Get()->RegisterNomadTabSpawner(
-		TileInspectorTabName,
+		STileInspectorWindow::TabName,
 		FOnSpawnTab::CreateRaw(this, &FChillFarmGameEditorModule::SpawnTileInspectorTab)
 	)
 	.SetDisplayName(NSLOCTEXT("TileInspector", "TabTitle", "Tile Inspector"))
@@ -90,7 +97,7 @@ void FChillFarmGameEditorModule::RegisterTabSpawner()
 
 void FChillFarmGameEditorModule::UnregisterTabSpawner()
 {
-	FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(TileInspectorTabName);
+	FGlobalTabmanager::Get()->UnregisterNomadTabSpawner(STileInspectorWindow::TabName);
 }
 
 TSharedRef<SDockTab> FChillFarmGameEditorModule::SpawnTileInspectorTab(const FSpawnTabArgs& SpawnTabArgs)
@@ -125,4 +132,17 @@ bool FChillFarmGameEditorModule::CanGenerateWorld()
 	for (TActorIterator<ATileWorldGenerator> It(World); It; ++It) return true;
 
 	return false;
+}
+
+void FChillFarmGameEditorModule::HandleMapOpened(const FString& InFilename, bool bAsTemplate)
+{
+	if (!GEditor) return;
+
+	auto World = GEditor->GetEditorWorldContext().World();
+	if (!World) return;
+
+	for (TActorIterator<ATileWorldGenerator> It(World); It; ++It)
+	{
+		if (It->ShouldGenerateOnEditorLoad()) It->GenerateWorld();
+	}
 }

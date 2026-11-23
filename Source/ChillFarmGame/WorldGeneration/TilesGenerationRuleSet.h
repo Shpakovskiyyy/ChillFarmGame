@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "CoreMinimal.h"
 #include "Engine/DataAsset.h"
@@ -16,16 +16,18 @@ class CHILLFARMGAME_API UTilesGenerationRuleSet : public UDataAsset
 	GENERATED_BODY()
 
 public:
-	UTilesGenerationRuleSet();
-	
-public:
-	ETileType ResolveTileType(const STileNoiseContext& Context);
+	// First rule whose noise range contains the value wins; Grass when none matches.
+	ETileType ResolveTileType(const STileNoiseContext& Context) const;
+
+#if WITH_EDITOR
+	virtual EDataValidationResult IsDataValid(class FDataValidationContext& Context) const override;
+#endif
 
 protected:
-	float GetNoiseBySource(ETileNoiseSource NoiseSource, const STileNoiseContext& Context);
+	static float GetNoiseBySource(ETileNoiseSource NoiseSource, const STileNoiseContext& Context);
 
 public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
 	TArray<FTileGenerationRule> Rules;
-	
+
 };

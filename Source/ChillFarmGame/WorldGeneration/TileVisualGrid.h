@@ -8,19 +8,16 @@
 #include "TileVisualGrid.generated.h"
 
 class ANavMeshBoundsVolume;
-class UTileDataGrid;
+class FTileGrid;
+class UTileWorldSubsystem;
 class UTilesVisualDataSet;
-class UTileTypeVisualData;
-class UHierarchicalInstancedStaticMeshComponent;
 
 
-struct FTileInstancesBatch
-{
-	TArray<FTransform> Transforms;
-	TArray<FIntPoint> Coordinates;
-};
-
-
+// Draws the tile map of the world's UTileWorldSubsystem.
+//
+// Holds no tile data of its own: everything it draws is read from the subsystem's grid, and it
+// redraws the affected chunks when tiles change. The components it creates are transient, the map
+// is regenerated from the seed rather than saved as thousands of instances.
 UCLASS()
 class CHILLFARMGAME_API ATileVisualGrid : public AActor
 {
@@ -28,42 +25,45 @@ class CHILLFARMGAME_API ATileVisualGrid : public AActor
 
 public:
 	ATileVisualGrid();
-	void Initialize(uint32 InChunkSize, float InTileSize);
 
 public:
-	void CreateChunk(const FIntPoint& ChunkIndex, const TMap<FTileVisualKey, FTileInstancesBatch>& InInstancesBatch);
+	// Rebuilds every chunk from the subsystem's grid and starts following its changes.
+	void RebuildAll(UTileWorldSubsystem& InTileWorld, int32 InChunkSize);
 
-public:
+	// Rebuilds the given chunks only.
+	void RebuildChunks(const TSet<FIntPoint>& InChunks);
+
 	void ClearAllChunks();
-	void RebuildChunk(const FIntPoint& ChunkCoordinates, UTileDataGrid* TileGridData, uint32 InChunkSize, float InTileSize);
 
 public:
-	void FinalizeNavigation();
-
-public:
-	const FIntPoint& GetTileCoordinatesFromHISMC(UHierarchicalInstancedStaticMeshComponent* InHISMC, uint32 InInstanceIndex);
+	// Tells the navigation system that the geometry inside the box changed.
+	void FinalizeNavigation(const FBox& InDirtyArea);
 
 protected:
 	virtual void OnConstruction(const FTransform& Transform) override;
+	virtual void EndPlay(const EEndPlayReason::Type EndPlayReason) override;
+
+private:
+	void BuildChunk(const FTileGrid& InGrid, const FIntPoint& InChunk);
+	void DestroyChunk(const FIntPoint& InChunk);
+	FBox GetChunkBounds(const FTileGrid& InGrid, const FIntPoint& InChunk) const;
+
+	void HandleTilesChanged(TConstArrayView<FIntPoint> InTiles);
+	void HandleWorldCleared();
+	void UnbindFromTileWorld();
 
 public:
-	UPROPERTY(EditAnywhere, Category="Tiles")
-	UTilesVisualDataSet* TilesVisualSet;
+	UPROPERTY(EditAnywhere, Category = "Tiles")
+	UTilesVisualDataSet* TilesVisualSet = nullptr;
 
 private:
-	UPROPERTY()
+	UPROPERTY(Transient)
 	TMap<FIntPoint, FTileChunkVisualData> Chunks;
-	// TODO Rename
-	TMap<UHierarchicalInstancedStaticMeshComponent*, TArray<FIntPoint>> InstanceToTile;
 
-private:
+	UPROPERTY(Transient)
+	TWeakObjectPtr<UTileWorldSubsystem> TileWorld;
+
 	TWeakObjectPtr<ANavMeshBoundsVolume> NavMeshBoundsVolume;
 
-	private:
-	UPROPERTY()
-	uint32 ChunkSize = INDEX_NONE;
-
-	UPROPERTY()
-	float TileSize = 0.0f;
-	
+	int32 ChunkSize = 64;
 };

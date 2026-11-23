@@ -4,86 +4,102 @@
 #include "TileDebugRender/TileDebugDrawTile.h"
 #include "TileDebugRender/TileDebugHighlightSubsystem.h"
 #include "TileVisualGrid.h"
+#include "TileWorldSubsystem.h"
+#include "Widgets/STileInspectorWindow.h"
 
 #include "Editor.h"
-#include "Kismet/GameplayStatics.h"
+#include "Engine/World.h"
 #include "Framework/Application/SlateApplication.h"
-#include "Components/HierarchicalInstancedStaticMeshComponent.h"
+#include "Framework/Docking/TabManager.h"
 
-DEFINE_LOG_CATEGORY_STATIC(LogTileDebugSelectionSubsystem, All, All)
+DEFINE_LOG_CATEGORY_STATIC(LogTileDebugSelectionSubsystem, Log, All)
 
 
 void UTileDebugSelectionEditorSubsystem::Initialize(FSubsystemCollectionBase& Collection)
 {
 	Super::Initialize(Collection);
-	UE_LOG(LogTileDebugSelectionSubsystem, Log, TEXT("TileDebugSelectionSubsystem initialized"))
 
-	if (!ClickProcessor)
+	if (FSlateApplication::IsInitialized())
 	{
 		ClickProcessor = MakeShared<FViewportMouseClickNotifier>();
+		ClickProcessor->OnViewportMouseClick.AddUObject(this, &UTileDebugSelectionEditorSubsystem::HandleViewportMouseClick);
 		FSlateApplication::Get().RegisterInputPreProcessor(ClickProcessor);
 	}
 
-	ClickProcessor->OnViewportMouseClick.AddUObject(this, &UTileDebugSelectionEditorSubsystem::HandleViewportMouseClick);
-	FEditorDelegates::OnMapOpened.AddUObject(this, &UTileDebugSelectionEditorSubsystem::HandleOnMapOpened);
+	FEditorDelegates::OnMapOpened.AddUObject(this, &UTileDebugSelectionEditorSubsystem::HandleMapOpened);
 }
 
 void UTileDebugSelectionEditorSubsystem::Deinitialize()
 {
-	Super::Deinitialize();
-	UE_LOG(LogTileDebugSelectionSubsystem, Log, TEXT("TileDebugSelectionSubsystem deinitialized"))
-
-	if(ClickProcessor) ClickProcessor->OnViewportMouseClick.RemoveAll(this);
-	FSlateApplication::Get().UnregisterInputPreProcessor(ClickProcessor);
+	if (ClickProcessor)
+	{
+		ClickProcessor->OnViewportMouseClick.RemoveAll(this);
+		if (FSlateApplication::IsInitialized()) FSlateApplication::Get().UnregisterInputPreProcessor(ClickProcessor);
+		ClickProcessor.Reset();
+	}
 
 	FEditorDelegates::OnMapOpened.RemoveAll(this);
+	Super::Deinitialize();
 }
 
-FIntPoint UTileDebugSelectionEditorSubsystem::GetSelectedTile() const
+void UTileDebugSelectionEditorSubsystem::SelectTile(UWorld* InWorld, const FIntPoint& InTile)
 {
-	return SelectedTile;
+	const UTileWorldSubsystem* TileWorld = InWorld ? InWorld->GetSubsystem<UTileWorldSubsystem>() : nullptr;
+	if (!TileWorld) return;
+
+	SelectedTile = InTile;
+
+	if (UTileDebugHighlightSubsystem* Highlight = InWorld->GetSubsystem<UTileDebugHighlightSubsystem>())
+	{
+		TArray<FTileDebugDrawTile> TilesToDraw;
+
+		if (const FTileData* Tile = TileWorld->GetGrid().FindTile(InTile))
+		{
+			// The box comes from the layout, so it matches the tile whatever mesh draws it.
+			const FTileGridLayout& Layout = TileWorld->GetLayout();
+			FTileDebugDrawTile& DrawTile = TilesToDraw.AddDefaulted_GetRef();
+			DrawTile.Center = Layout.TileCenter(InTile, Tile->Height);
+			DrawTile.Extent = FVector(Layout.TileSize * 0.5, Layout.TileSize * 0.5, 5.0);
+			DrawTile.Color = FColor::Yellow;
+		}
+
+		Highlight->SetTiles(TilesToDraw);
+	}
+
+	OnTileSelected.Broadcast(SelectedTile);
 }
 
-void UTileDebugSelectionEditorSubsystem::HandleOnMapOpened(const FString&, bool)
-{
-	auto World = GEditor->GetEditorWorldContext().World();
-	auto FoundActor = UGameplayStatics::GetActorOfClass(World, ATileVisualGrid::StaticClass());
-	if (!FoundActor) return;
-	TileVisualGrid = Cast<ATileVisualGrid>(FoundActor);
-}
-
-// TODO Cleanup
 void UTileDebugSelectionEditorSubsystem::HandleViewportMouseClick(const FHitResult& InHitResult)
 {
-	if (!TileVisualGrid.Get()) return;
-	if (!InHitResult.Component.IsValid()) return;
-	
-	auto HISMC = Cast<UHierarchicalInstancedStaticMeshComponent>(InHitResult.Component.Get());
-	if (!HISMC) return;
-	
-	FTransform TileTransform;
-	HISMC->GetInstanceTransform(InHitResult.Item, TileTransform, true);
-	const auto TileLocation = TileTransform.GetLocation();
-	
-	auto World = GEditor->GetEditorWorldContext().World();
-	if (!World) return;
-	
-	FTileDebugDrawTile DebugTile;
-	DebugTile.Center = TileLocation;
-	
-	const auto& BoxExtent = HISMC->GetStaticMesh() ? HISMC->GetStaticMesh()->GetBoundingBox().GetExtent() : FVector(50.f);
-	DebugTile.Extent = BoxExtent;
-	DebugTile.Color = FColor::Red;
+	// Only clicks on the tile map select tiles; clicks on other actors keep normal editor behaviour.
+	const AActor* HitActor = InHitResult.GetActor();
+	if (!HitActor || !HitActor->IsA<ATileVisualGrid>()) return;
 
-	if (auto HighlightSubsystem = GWorld->GetSubsystem<UTileDebugHighlightSubsystem>())
+	UWorld* World = HitActor->GetWorld();
+	const UTileWorldSubsystem* TileWorld = World ? World->GetSubsystem<UTileWorldSubsystem>() : nullptr;
+	if (!TileWorld || !TileWorld->HasTiles()) return;
+
+	// Step slightly into the surface that was hit. On a tile top that is the tile itself; on the side
+	// of a cliff it is the higher tile the cliff belongs to, not the one in front of it.
+	const FVector PointInsideSurface = InHitResult.ImpactPoint - InHitResult.ImpactNormal * 1.0;
+
+	FIntPoint Coordinates;
+	if (!TileWorld->FindTileAt(PointInsideSurface, &Coordinates)) return;
+
+	SelectTile(World, Coordinates);
+
+	// Open the inspector on a viewport click only, and only when it is closed: invoking an open tab
+	// focuses it, which would take keyboard focus away from the viewport on every click. A freshly
+	// spawned inspector reads the current selection itself, so the order with SelectTile does not matter.
+	if (!FGlobalTabmanager::Get()->FindExistingLiveTab(STileInspectorWindow::TabName).IsValid())
 	{
-		TArray<FTileDebugDrawTile> TilesToHighlight;
-		TilesToHighlight.Add(DebugTile);
-
-		HighlightSubsystem->UpdateTiles(TilesToHighlight);
-		HighlightSubsystem->SetSelectedTile(0);
+		FGlobalTabmanager::Get()->TryInvokeTab(STileInspectorWindow::TabName);
 	}
-	
-	const auto& TileCoordinates = TileVisualGrid->GetTileCoordinatesFromHISMC(HISMC, InHitResult.Item);
-	OnTileSelected.Broadcast(TileCoordinates);
+}
+
+void UTileDebugSelectionEditorSubsystem::HandleMapOpened(const FString& InFilename, bool bAsTemplate)
+{
+	// Coordinates of the previous map mean nothing in the new one.
+	SelectedTile = FIntPoint::NoneValue;
+	OnTileSelected.Broadcast(SelectedTile);
 }

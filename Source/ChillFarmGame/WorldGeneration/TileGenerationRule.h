@@ -11,10 +11,10 @@ struct FTileGenerationRule
 	GENERATED_BODY()
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
-	ETileType TileType;
+	ETileType TileType = ETileType::Grass;
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite)
-	ETileNoiseSource NoiseSource;
+	ETileNoiseSource NoiseSource = ETileNoiseSource::Height;
 
 	/* Noise thresholds */
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(ClampMin="0", ClampMax="1"))

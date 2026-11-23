@@ -15,22 +15,22 @@ All active development is happening on the `TerrainGenerationMVP` branch. This b
 ## What Exists So Far
 
 ### Procedural World Generation
-The world is built on a tile grid generated at runtime using Perlin noise. Each tile gets assigned a biome and tile type based on noise values for height and moisture. The generation runs through several post-processing passes (shore detection, neighbor recalculation) before the world is displayed.
+`ATileWorldGenerator` builds the tile map from a seed by running a list of generation passes in order: terrain noise (height, moisture, water, elevation levels), biomes, tile types, terraces, shores, smoothing and fertility. Passes work on a plain `FTileGrid` without touching the world, so the same seed always gives the same map and the pipeline can be tested without a level.
 
-The world is rendered using Hierarchical Instanced Static Mesh Components (HISMC) organized into chunks. This is a preview/editor approach — production rendering will move to ProceduralMeshComponent.
+The map is drawn by `ATileVisualGrid` with Hierarchical Instanced Static Mesh components, one per autotile piece per chunk. The drawn map is not saved with the level; it is regenerated from the seed when the level opens.
 
 ### Tile System
-Each tile stores its type, biome, fertility, moisture, and other properties. Tiles are mutated through a central `FTileMutationHelper` which also records the history of every change for debugging purposes.
+Each tile is six bytes of values: type, biome, elevation level, fertility, moisture and flags. `UTileWorldSubsystem` owns the live map and is the only way to change it at runtime (`MutateTile`); visuals and tools react to the changes it broadcasts.
 
 ### Tile Inspector (Editor Tool)
-A custom editor tool for inspecting and debugging the generated world. This is the main focus of the current branch.
+A custom editor tool for inspecting and debugging the generated world.
 
-Features:
-- Click any tile in the editor viewport to select it
-- Selected tile gets highlighted with a yellow outline (rendered via custom SceneProxy)
-- A docked Tile Inspector panel shows tile coordinates, type, biome, and full mutation history — every change made to the tile during generation, what caused it, and in what order
+- Click any tile in the editor viewport to select it; the tile gets a yellow outline (custom SceneProxy)
+- The docked Tile Inspector panel shows the tile's data and its full history: every change, which step made it and why, with the changed fields shown as before -> after
 
-This tool exists entirely in the editor module and has zero impact on runtime or shipping builds.
+History is recorded by the editor module only; the game build contains none of it.
+
+See [Docs/Architecture.md](Docs/Architecture.md) for the full design, the reasoning behind it and the roadmap.
 
 ---
 
@@ -38,27 +38,22 @@ This tool exists entirely in the editor module and has zero impact on runtime or
 
 ```
 ChillFarmGame/
+├── Docs/Architecture.md            # World architecture, decisions, roadmap
 ├── Source/
-│   ├── ChillFarmGame/           # Runtime module
-│   │   ├── WorldGeneration/     # Tile grid, generator, post-processor, biome data
-│   │   │   └── TileMutationHistory/  # Mutation tracking system
-│   │   ├── Crops/               # Crop actors (early stage)
-│   │   ├── Player/              # Player controller
-│   │   └── Persistent/          # Game state, save system stubs
-│   └── ChillFarmGameEditor/     # Editor-only module
-│       ├── TileDebugRender/     # SceneProxy, highlight component, highlight subsystem
-│       ├── TileDebugSelection/  # Viewport click notifier, selection subsystem
-│       └── Widgets/             # Slate UI — Tile Inspector window, snapshot registry
+│   ├── ChillFarmGame/              # Runtime module
+│   │   ├── WorldGeneration/        # Tile data, grid, layout, mutations, world subsystem, visuals, biome data
+│   │   │   ├── Generation/         # Generation context and passes
+│   │   │   └── TileMutationHistory/  # Change source enum
+│   │   ├── Tests/                  # Automation specs (ChillFarmGame.TileWorld)
+│   │   ├── Crops/                  # Crop actors (early stage)
+│   │   ├── Player/                 # Player controller and character
+│   │   └── Persistent/             # Game mode
+│   └── ChillFarmGameEditor/        # Editor-only module
+│       └── TileMutationHistoryEditor/
+│           ├── TileDebugRender/    # Highlight component, scene proxy, subsystem
+│           ├── TileDebugSelection/ # Viewport click notifier
+│           └── Widgets/            # Tile Inspector window
 ```
-
----
-
-## Architecture Notes
-
-- Runtime and editor modules are strictly separated. The editor module depends on runtime, never the other way around.
-- Tile mutation history is collected in the runtime module and consumed by the editor tool. It is guarded by a subsystem null-check so it has no effect in shipping builds.
-- Tile snapshots in the inspector are copies, not live pointers — this keeps the tool stable across world regeneration.
-- Biome smoothing is currently disabled. It was causing stripe artifacts along biome boundaries and will be revisited with a better algorithm.
 
 ---
 
@@ -67,4 +62,5 @@ ChillFarmGame/
 - Harvest and inventory
 - Store and economy loop
 - Save/load
-- Production-quality world rendering via ProceduralMeshComponent
+- Cliffs between elevation levels, ramps, rivers and roads
+- Farm site selection based on generated factors

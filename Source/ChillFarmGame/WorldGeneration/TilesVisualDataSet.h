@@ -16,7 +16,11 @@ class CHILLFARMGAME_API UTilesVisualDataSet : public UDataAsset
 	GENERATED_BODY()
 
 public:
-	UTilesVisualDataSet();
+#if WITH_EDITOR
+	// Reports tile types that have no visual data. Runs on demand (asset save, "Validate Assets",
+	// the data validation commandlet) when the asset's data is actually loaded.
+	virtual EDataValidationResult IsDataValid(class FDataValidationContext& Context) const override;
+#endif
 
 public:
 	UPROPERTY(EditDefaultsOnly)

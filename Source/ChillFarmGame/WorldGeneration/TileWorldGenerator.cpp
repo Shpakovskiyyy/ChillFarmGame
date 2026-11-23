@@ -1,18 +1,17 @@
 ﻿#include "TileWorldGenerator.h"
 
+#include "TileGrid.h"
 #include "TileVisualGrid.h"
-#include "TilesGenerationRuleSet.h"
-#include "TileDataGrid.h"
-#include "TileNeighborResolver.h"
-
-#include "BiomeTypeData.h"
+#include "TileWorldSubsystem.h"
 #include "BiomeTypeDataSet.h"
-#include "TileWorldPostProcessor.h"
+#include "TilesGenerationRuleSet.h"
+#include "Generation/TileGenerationContext.h"
+#include "Generation/TileGenerationPass.h"
+#include "Generation/TileGenerationPasses.h"
 
+#include "Engine/World.h"
 #include "Kismet/GameplayStatics.h"
-
 #include "Stats/StatsMisc.h"
-#include "TileMutationHistory/TileMutationHelper.h"
 
 
 DEFINE_LOG_CATEGORY(LogTileWorldGenerator);
@@ -23,197 +22,102 @@ ATileWorldGenerator::ATileWorldGenerator()
 	PrimaryActorTick.bCanEverTick = false;
 	PrimaryActorTick.bStartWithTickEnabled = false;
 
-	DataGrid = CreateDefaultSubobject<UTileDataGrid>(TEXT("Logical Grid"));
+	// The default pipeline. Every generator placed on a level gets its own copies, editable inline.
+	Passes.Add(CreateDefaultSubobject<UTerrainNoisePass>(TEXT("TerrainPass")));
+	Passes.Add(CreateDefaultSubobject<UBiomeAssignmentPass>(TEXT("BiomePass")));
+	Passes.Add(CreateDefaultSubobject<UTileTypePass>(TEXT("TileTypePass")));
+	Passes.Add(CreateDefaultSubobject<ULevelConstraintPass>(TEXT("TerracePass")));
+	Passes.Add(CreateDefaultSubobject<UShorePass>(TEXT("ShorePass")));
+	Passes.Add(CreateDefaultSubobject<UTileSmoothingPass>(TEXT("SmoothingPass")));
+	Passes.Add(CreateDefaultSubobject<UFertilityPass>(TEXT("FertilityPass")));
+}
+
+FTileGridLayout ATileWorldGenerator::MakeLayout() const
+{
+	FTileGridLayout Layout;
+	Layout.Size = FIntPoint(FMath::Max(1, GridSizeX), FMath::Max(1, GridSizeY));
+	Layout.TileSize = FMath::Max(1.f, GridTileSize);
+	Layout.LevelHeight = FMath::Max(1.f, LevelHeight);
+	Layout.Origin = GridOrigin;
+	return Layout;
 }
 
 void ATileWorldGenerator::GenerateWorld()
 {
-	auto TimeElapsed = 0.0;
+	UWorld* World = GetWorld();
+	UTileWorldSubsystem* TileWorld = World ? World->GetSubsystem<UTileWorldSubsystem>() : nullptr;
+	if (!TileWorld)
+	{
+		UE_LOG(LogTileWorldGenerator, Error, TEXT("'%s' Cannot generate: the world has no UTileWorldSubsystem"), *GetNameSafe(this));
+		return;
+	}
+
+	ATileVisualGrid* Visuals = FindVisualGrid();
+	if (!Visuals)
+	{
+		UE_LOG(LogTileWorldGenerator, Warning, TEXT("'%s': There is no ATileVisualGrid on the level, the map will not be drawn"), *GetNameSafe(this));
+	}
+
+	double TimeElapsed = 0.0;
 	{
 		SCOPE_SECONDS_COUNTER(TimeElapsed);
 
-		if (!DataGrid)
-		{
-			DataGrid = NewObject<UTileDataGrid>(this, TEXT("Logical Grid"));
-		}
-		DataGrid->ClearAllChunks();
-		
-		if (!TileGrid)
-		{
-			TileGrid = Cast<ATileVisualGrid>(UGameplayStatics::GetActorOfClass(this, ATileVisualGrid::StaticClass()));
-		}
-		TileGrid->Initialize(ChunkSize, GridTileSize);
-		
-		DataGrid->Initialize(FIntPoint(GridSizeX, GridSizeY), GridTileSize);
+		// Listeners (visuals, the editor's history) drop what they know about the previous map.
+		TileWorld->ClearWorld();
 
-		FRandomStream RNG(WorldSeed);
-		FVector2D NoiseOffset(RNG.FRand() * NoiseOffsetRange, RNG.FRand() * NoiseOffsetRange);
-		FVector2D WarpOffset(RNG.FRand() * WarpOffsetRange, RNG.FRand() * WarpOffsetRange);
-		
-		for (auto CX = 0; CX < GridSizeX; CX += ChunkSize)
-		{
-			for (auto CY = 0; CY < GridSizeY; CY += ChunkSize)
-			{
-				ProcessChunk(CX, CY, NoiseOffset, WarpOffset);
-			}
-		}
-		
-		DataGrid->RecalculateNeighbors();
-	
-		if (!PostProcessor) PostProcessor = NewObject<UTileWorldPostProcessor>(this, TEXT("WorldPostProcessor"));
-		PostProcessor->ProcessWorld(DataGrid);
+		FTileGrid Grid(MakeLayout());
+		FTileGenerationContext Context(Grid, WorldSeed);
+		Context.Biomes = BiomeDataSet;
+		Context.DefaultRuleSet = DefaultTileGenerationRuleSet;
+		Context.Instigator = this;
 
-		for (int32 CX = 0; CX < GridSizeX; CX += ChunkSize)
+		// Only pay for describing every change when a tool records them.
+		if (TileWorld->WantsChangeNotifications())
 		{
-			for (int32 CY = 0; CY < GridSizeY; CY += ChunkSize)
+			TWeakObjectPtr<UTileWorldSubsystem> WeakTileWorld = TileWorld;
+			Context.OnChange = [WeakTileWorld](const FTileChange& Change)
 			{
-				VisualizeChunk(CX, CY);
-			}
+				if (const UTileWorldSubsystem* Target = WeakTileWorld.Get()) Target->NotifyExternalChange(Change);
+			};
 		}
+
+		TArray<const UTileGenerationPass*> PassList;
+		for (const UTileGenerationPass* Pass : Passes) PassList.Add(Pass);
+
+		if (!TileGeneration::RunPasses(PassList, Context))
+		{
+			UE_LOG(LogTileWorldGenerator, Error, TEXT("'%s': Generation stopped, see the errors above"), *GetNameSafe(this));
+			return;
+		}
+
+		TileWorld->SetGrid(MoveTemp(Grid));
+
+		if (Visuals) Visuals->RebuildAll(*TileWorld, ChunkSize);
 	}
-	
-	UE_LOG(LogTileWorldGenerator, Display, TEXT("WORLD GENERATED IN %f sec"), TimeElapsed);
+
+	UE_LOG(LogTileWorldGenerator, Display, TEXT("World generated in %.3f s (%d x %d tiles, seed %d)"), TimeElapsed, GridSizeX, GridSizeY, WorldSeed);
 	OnTerrainGenerated.Broadcast();
 }
 
 void ATileWorldGenerator::CleanGeneratedWorld()
 {
-	if (!TileGrid) return;
-	TileGrid->ClearAllChunks();
-}
-
-FOnTerrainGenerated& ATileWorldGenerator::GetOnTerrainGenerated() { return OnTerrainGenerated; }
-
-void ATileWorldGenerator::ProcessChunk(int32 StartX, int32 StartY, const FVector2D& NoiseOffset, const FVector2D& WarpOffset)
-{
-	const auto EndX = FMath::Min(StartX + ChunkSize, GridSizeX);
-	const auto EndY = FMath::Min(StartY + ChunkSize, GridSizeY);
-
-	for (auto X = StartX; X < EndX; X++)
+	if (UWorld* World = GetWorld())
 	{
-		for (auto Y = StartY; Y < EndY; Y++)
+		if (UTileWorldSubsystem* TileWorld = World->GetSubsystem<UTileWorldSubsystem>())
 		{
-			GenerateTile(X, Y, NoiseOffset, WarpOffset);
-			//DataGrid->SetTile(X, Y, TileData);
-		}
-	}
-}
-
-void ATileWorldGenerator::GenerateTile(int32 X, int32 Y, const FVector2D& NoiseOffset, const FVector2D& WarpOffset)
-{
-	auto NoiseContext = GenerateTileNoise(X, Y, NoiseOffset, WarpOffset);
-
-	FTileMutationHelper TileMutation;
-	// TODO Mutation: Actual phases and reasons
-	auto MutationContext = FTileMutationContext::Make({X, Y}, ETileMutationSource::WorldGeneration, nullptr, this, TEXT("Base World Generation"), TEXT("Tile Generation"));
-	if (NoiseContext.Height <= WaterLevel)
-	{
-		TileMutation.SetType(ETileType::Water);
-		TileMutation.SetMoisture(100);
-		TileMutation.SetBiomeTypeData(GetWaterBiomeData());
-		MutationContext.BiomeType = GetWaterBiomeData();
-		DataGrid->MutateTile(MutationContext, TileMutation);
-
-		// TODO
-		//WaterBiome->FillRuntimeTileData(Result, NoiseContext.Height, NoiseContext.Moisture);
-		return;
-	}
-	
-	auto FinalBiome = GenerateBiomeData(X, Y, NoiseContext);
-	
-	const auto RulesSet = FinalBiome && FinalBiome->TilesGenerationRuleSet ? FinalBiome->TilesGenerationRuleSet : DefaultTileGenerationRuleSet;
-	auto TileType = RulesSet->ResolveTileType(NoiseContext);
-	
-	TileMutation.SetBiomeTypeData(FinalBiome);
-	TileMutation.SetFertility(FinalBiome->BaseFertility);
-	TileMutation.SetMoisture(FMath::RoundToInt(NoiseContext.Moisture * 100.f));
-	TileMutation.SetType(TileType);
-	
-	MutationContext.BiomeType = FinalBiome;
-	DataGrid->MutateTile(MutationContext, TileMutation);
-}
-
-void ATileWorldGenerator::VisualizeChunk(int32 ChunkX, int32 ChunkY)
-{
-	TMap<FTileVisualKey, FTileInstancesBatch> Batched;
-	
-	const auto EndX   = FMath::Min(ChunkX + ChunkSize, GridSizeX);
-	const auto EndY   = FMath::Min(ChunkY + ChunkSize, GridSizeY);
-
-	for (auto X = ChunkX; X < EndX; X++)
-	{
-		for (auto Y = ChunkY; Y < EndY; Y++)
-		{
-			const auto& Tile = DataGrid->GetTileChecked(X, Y);
-
-			const auto ResolvedKey =
-				FTileNeighborResolver::Resolve(Tile->GetType(), Tile->GetNeighborMask());
-
-			FVector LocalPos(
-				(X - ChunkX) * GridTileSize,
-				(Y - ChunkY) * GridTileSize,
-				0.f
-			);
-
-			Batched.FindOrAdd(ResolvedKey).Transforms.Emplace(
-				FRotator(0.f, ResolvedKey.Rotation, 0.f),
-				LocalPos,
-				FVector::OneVector
-			);
-
-			Batched.FindOrAdd(ResolvedKey).Coordinates.Emplace( FIntPoint(X, Y) );
+			// The visual grid listens to this and removes its chunks.
+			TileWorld->ClearWorld();
 		}
 	}
 
-	TileGrid->CreateChunk(
-		FIntPoint(ChunkX / ChunkSize, ChunkY / ChunkSize),
-		Batched
-	);
+	if (ATileVisualGrid* Visuals = FindVisualGrid()) Visuals->ClearAllChunks();
 }
 
-UBiomeTypeData* ATileWorldGenerator::GetWaterBiomeData()
+ATileVisualGrid* ATileWorldGenerator::FindVisualGrid()
 {
-	for (const auto BiomeData : BiomeDataSet->BiomeData) if (BiomeData->BiomeType == EBiomeType::Water) return BiomeData;
-	return nullptr;
-}
-
-STileNoiseContext ATileWorldGenerator::GenerateTileNoise(int32 X, int32 Y, const FVector2D& NoiseOffset, const FVector2D& WarpOffset)
-{
-	const auto PX = X * NoiseScale + NoiseOffset.X;
-	const auto PY = Y * NoiseScale + NoiseOffset.Y;
-	
-	const auto WarpX = FMath::PerlinNoise2D({ PX + WarpOffset.X, PY + WarpOffset.Y });
-	const auto WarpY = FMath::PerlinNoise2D({ PX - WarpOffset.Y, PY + WarpOffset.X });
-
-	const FVector2D Warped(
-		PX + WarpX * WarpStrength,
-		PY + WarpY * WarpStrength
-	);
-
-	const auto HeightNoise = FMath::PerlinNoise2D(Warped) * 0.5f + 0.5f;
-	const auto MoistureNoise = FMath::PerlinNoise2D(Warped + FVector2D(1000.f)) * 0.5f + 0.5f;
-	const auto SecondaryNoise = GetSecondaryNoise(X, Y);
-
-	return STileNoiseContext{.Height = HeightNoise, .Moisture = MoistureNoise, .Secondary = SecondaryNoise};
-}
-
-UBiomeTypeData* ATileWorldGenerator::GenerateBiomeData(int32 InX, int32 InY, const STileNoiseContext& NoiseContext)
-{
-	const auto BiomeBlend = BiomeDataSet->ResolveBiomeBlend(NoiseContext.Height, NoiseContext.Moisture);
-
-	const auto BiomeA = BiomeBlend.Primary;
-	const auto BiomeB = BiomeBlend.Secondary;
-	
-	const auto BlendNoise = GetSecondaryNoise(InX, InY);
-	
-	return (BiomeB && BlendNoise < BiomeBlend.BlendAlpha) ? BiomeB : BiomeA;
-}
-
-float ATileWorldGenerator::GetSecondaryNoise(int32 X, int32 Y)
-{
-	const auto SX = X * SecondaryNoiseScale;
-	const auto SY = Y * SecondaryNoiseScale;
-
-	const auto Noise = FMath::PerlinNoise2D({ SX, SY });
-	return (Noise + 1.f) * 0.5f * SecondaryNoiseStrength; // 0..1
+	if (!VisualGrid)
+	{
+		VisualGrid = Cast<ATileVisualGrid>(UGameplayStatics::GetActorOfClass(this, ATileVisualGrid::StaticClass()));
+	}
+	return VisualGrid;
 }

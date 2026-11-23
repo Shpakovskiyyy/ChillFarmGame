@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 #include "CoreMinimal.h"
 #include "Subsystems/WorldSubsystem.h"
@@ -10,29 +10,24 @@
 class UTileDebugHighlightComponent;
 
 
+// Draws debug boxes over tiles in an editor world (the inspector's selection).
 UCLASS()
 class UTileDebugHighlightSubsystem : public UWorldSubsystem
 {
 	GENERATED_BODY()
 
 public:
-	virtual void Initialize(FSubsystemCollectionBase& Collection) override;
-
-public:
 	virtual bool ShouldCreateSubsystem(UObject* Outer) const override;
+	virtual void Deinitialize() override;
 
 public:
-	void UpdateTiles(const TArray<FTileDebugDrawTile>& InTiles);
-	void SetSelectedTile(int32 InSelectedTileIndex);
-
-protected:
-	void HandleOnMapOpened(const FString&, bool);
+	// Replaces everything that is drawn. An empty array clears the highlight.
+	void SetTiles(const TArray<FTileDebugDrawTile>& InTiles);
 
 private:
-	UPROPERTY()
-	AActor* DummyActor = nullptr;
+	UTileDebugHighlightComponent* GetOrCreateRenderComponent();
 
-	UPROPERTY()
-	UTileDebugHighlightComponent* RenderComponent = nullptr;
-
+private:
+	UPROPERTY(Transient)
+	TObjectPtr<UTileDebugHighlightComponent> RenderComponent = nullptr;
 };
