@@ -3,6 +3,7 @@
 #include "ChillFarmGamePlayerController.h"
 #include "ChillFarmGameCharacter.h"
 #include "TileWorldGenerator.h"
+#include "TileWorldSubsystem.h"
 #include "Engine/World.h"
 #include "Kismet/GameplayStatics.h"
 
@@ -41,5 +42,27 @@ void AChillFarmGameGameMode::BeginPlay()
 
 void AChillFarmGameGameMode::BeginPlayDeferred()
 {
-	RestartPlayer(GetWorld()->GetFirstPlayerController());
+	APlayerController* Controller = GetWorld()->GetFirstPlayerController();
+	if (!Controller) return;
+
+	// The PlayerStart is placed by hand, but the ground under it depends on the generated elevation.
+	// Stand the pawn in the middle of the tile under the start, on its top: a raised tile under the
+	// start, or a higher neighbour next to it, would otherwise block the spawn.
+	const AActor* Start = FindPlayerStart(Controller);
+	const UTileWorldSubsystem* TileWorld = GetWorld()->GetSubsystem<UTileWorldSubsystem>();
+	const UClass* PawnClass = GetDefaultPawnClassForController(Controller);
+	FIntPoint TileCoordinates;
+	const FTileData* Tile = Start && TileWorld ? TileWorld->FindTileAt(Start->GetActorLocation(), &TileCoordinates) : nullptr;
+	if (!Tile || !PawnClass)
+	{
+		RestartPlayer(Controller);
+		return;
+	}
+
+	constexpr double SpawnClearance = 2.0;
+	FVector Location = TileWorld->GetLayout().TileCenter(TileCoordinates, Tile->Height);
+	Location.Z += PawnClass->GetDefaultObject<APawn>()->GetDefaultHalfHeight() + SpawnClearance;
+	const FTransform SpawnTransform(FRotator(0.0, Start->GetActorRotation().Yaw, 0.0), Location);
+
+	RestartPlayerAtTransform(Controller, SpawnTransform);
 }

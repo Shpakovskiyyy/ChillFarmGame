@@ -119,6 +119,8 @@ Automation specs live in `Source/ChillFarmGame/Tests`, grouped under `ChillFarmG
 | `BiomesAndRules` | Biome selection and blending, `FindBiome`, rule order and noise sources |
 | `Generation` | Generation context, `TileGeneration::RunPasses` (order, disabled passes, all-or-nothing setup check), each pass on hand-made grids, and the full pipeline: determinism, world invariants (no steep steps, shores are sand, water on level 0...), and replaying the recorded history rebuilds the exact final world |
 | `Subsystem` | `UTileWorldSubsystem` events, runtime edits, position lookup |
+| `Cliffs` | Which edges get a side (raised tiles, deeper drops, map edges, chunk ranges), wall placement for any mesh pivot |
+| `Farming` | Tilling and watering rules, the use action, a gameplay change reaching listeners with its step |
 
 Grids in tests are written as rows of characters (`G` grass, `W` water...) with `TileTestUtils::MakeGrid`, so the expected map is readable in the test itself. Equality checks use `TileTestUtils::TestEq`, which prints both values on failure and does not depend on engine-version-specific `TestEqual` overloads.
 
@@ -204,7 +206,7 @@ Each entry: what it was, what it is now, why, and what it costs.
 - **Before:** no elevation.
 - **After:** `Height` level per tile from the height noise (`MaxLevel`, default 0, so the world stays flat until you enable it), and a pass that cuts slopes so direct neighbours differ by at most one level. The algorithm is a two-sweep clamp, O(tiles), checked against brute force on 300 random grids.
 - **Why:** Stardew-style terrain is discrete terraces with cliffs, not smooth hills; farm tiles must be flat.
-- **Cost:** with `MaxLevel > 0` tiles are drawn at their height, but there are no cliff meshes yet, so terraces look like floating plates. Cliffs are roadmap step 1.
+- **Cost:** with `MaxLevel > 0` tiles are drawn at their height; the sides are drawn by D12. The PlayerStart is placed by hand, so the game mode stands the pawn in the middle of the tile under it, on that tile's level.
 
 ### D9. Smoothing does something now
 
@@ -222,6 +224,13 @@ Each entry: what it was, what it is now, why, and what it costs.
 
 - **Why:** a 128×128 map takes milliseconds to generate; saving 16 000 HISM instances in the level made it heavy and fragile (and `InstanceToTile` was not saved with them). Seed + settings is the source of truth.
 - **Cost:** editor load runs generation once. Turn off `bGenerateWhenLevelOpens` on a generator to skip it.
+
+### D12. Cliffs are stretched walls, derived from heights
+
+- **Before:** terraces were floating plates.
+- **After:** `TileCliffs` finds every edge where a tile is higher than its neighbour (the map edge counts as level 0) and the visual grid draws one wall per edge with `CliffMesh` from the visual set, stretched from the mesh bounds into the drop. One instanced component per chunk. A wall belongs to the high tile and sits just inside its edge, so it is rebuilt with that tile. The autotile mask treats a same-type neighbour on another level as different, so surfaces get edges along cliffs.
+- **Why:** smallest step that makes elevation readable and blocks walking up a level, with no new art: any mesh works, a cube is fine. Visual only, so it can never disagree with the data.
+- **Cost:** a tall drop stretches one wall, so a textured cliff material would stretch too. Corners are plain overlaps, not shaped pieces. The dual-grid evaluation (roadmap step 1) still decides the final look; this version can be replaced inside `ATileVisualGrid` without touching data or passes.
 
 ---
 
@@ -250,7 +259,7 @@ When you open the project after these commits:
 Nothing below was possible without an Unreal toolchain.
 
 1. Build `ChillFarmGameEditor` (Development Editor). Fix anything the compiler finds; the most likely spots are engine API signatures in `TileVisualGrid.cpp`, `ViewportMouseClickNotifier.cpp` and `STileInspectorWindow.cpp`.
-2. Session Frontend → Automation → run `ChillFarmGame.TileWorld` (88 specs, see section 2.6).
+2. Session Frontend → Automation → run `ChillFarmGame.TileWorld` (113 specs, see section 2.6).
 3. Open the test map: the world appears without pressing Generate.
 4. Click a tile: yellow box on that tile, inspector shows type/biome/fertility/moisture and readable history.
 5. Click inside the Tile Inspector tab while it overlaps the viewport: nothing gets selected.
@@ -263,11 +272,11 @@ Nothing below was possible without an Unreal toolchain.
 
 Ordered so each step is visible and testable on its own, and nothing already working is thrown away.
 
-1. **Cliffs.** With levels in place, draw the sides. Evaluate the dual grid: the visual grid is offset by half a tile and each visual tile reads its four corners (marching squares), which needs about six shapes instead of the current 8-neighbour piece set and handles both surface transitions and cliffs. The neighbour mask must also treat a same-type neighbour at another level as different.
+1. **Cliffs.** First version done (D12): stretched walls per edge. Still to evaluate for the final look: Evaluate the dual grid: the visual grid is offset by half a tile and each visual tile reads its four corners (marching squares), which needs about six shapes instead of the current 8-neighbour piece set and handles both surface transitions and cliffs. The neighbour mask must also treat a same-type neighbour at another level as different.
 2. **Ramps and reachability.** A pass that places ramps between terraces and a flood fill that guarantees every land area is reachable from the road.
 3. **Water.** Rivers carved downhill as a pass; water level per lake instead of a global threshold.
 4. **Roads and farm sites.** A* road pass over a cost field (slope, water, biome). Derived per-tile fields with breadth-first distance transforms: distance to water, to road, size of the flat area. A scoring pass that rates farm sites and a validation pass that guarantees enough good ones. The inspector overlay for these fields is the prototype of the player's site selection screen.
-5. **Gameplay edits.** Tilling, watering, building through `UTileWorldSubsystem::MutateTile` with `ETileMutationSource::Gameplay`. Keep crops, buildings and items out of `FTileData`: they are sparse objects keyed by tile coordinate in their own systems, which listen to tile changes.
+5. **Gameplay edits.** Tilling and watering are in (`TileFarming`, right mouse, `ETileType::Farmland`, `ETileFlags::Watered`); building is next. All through `UTileWorldSubsystem::MutateTile` with `ETileMutationSource::Gameplay`. Keep crops, buildings and items out of `FTileData`: they are sparse objects keyed by tile coordinate in their own systems, which listen to tile changes.
 6. **Saving.** Seed + generation settings + the list of gameplay changes (or a diff of the grid against a fresh generation). Small, and old saves keep working when unrelated generation code changes only if generation stays deterministic, which the determinism test guards.
 7. **Scale.** Larger maps: run passes on a worker thread (they already have no world access), then chunk streaming for visuals.
 8. **Rendering decision.** Revisit HISM vs. generated chunk meshes once cliffs exist and the target map size is known.

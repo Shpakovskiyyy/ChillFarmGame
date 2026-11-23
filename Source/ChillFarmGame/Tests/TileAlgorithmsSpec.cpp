@@ -280,6 +280,15 @@ void FTileAlgorithmsSpec::Define()
 			TestEq(*this, TEXT("Top-left piece"), PieceAt(Grid, 0, 0).VisualPositionType, EPos::Corner);
 		});
 
+		It("treats the same type on another level as a different neighbour", [this]()
+		{
+			FTileGrid Grid = MakeGrid({ TEXT("GG"), TEXT("GG") });
+			SetHeights(Grid, { TEXT("01"), TEXT("00") });
+			const uint8 Expected = Bit(ETileNeighborSide::S);
+			TestEq(*this, TEXT("Top-left mask"), FTileNeighborResolver::ComputeSameTypeMask(Grid, FIntPoint(0, 0)), static_cast<uint8>(Expected | Bit(ETileNeighborSide::SE)));
+			TestEq(*this, TEXT("Raised tile mask"), FTileNeighborResolver::ComputeSameTypeMask(Grid, FIntPoint(1, 0)), static_cast<uint8>(0));
+		});
+
 		It("returns an empty mask outside the grid", [this]()
 		{
 			const FTileGrid Grid = MakeGrid({ TEXT("GG"), TEXT("GG") });

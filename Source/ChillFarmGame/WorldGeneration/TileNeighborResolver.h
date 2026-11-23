@@ -12,7 +12,7 @@ class FTileGrid;
 // in FTileData, so it can never be stale after a tile changes.
 struct CHILLFARMGAME_API FTileNeighborResolver
 {
-	// Bitmask of ETileNeighborSide for the eight neighbours that have the same type as the tile.
+	// Bitmask of ETileNeighborSide for the eight neighbours that have the same type and level as the tile.
 	static uint8 ComputeSameTypeMask(const FTileGrid& InGrid, const FIntPoint& InTile);
 
 	static FTileVisualKey Resolve(ETileType TileType, uint8 NeighborMask);

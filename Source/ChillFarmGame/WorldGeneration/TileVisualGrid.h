@@ -8,6 +8,9 @@
 #include "TileVisualGrid.generated.h"
 
 class ANavMeshBoundsVolume;
+class UHierarchicalInstancedStaticMeshComponent;
+class UMaterialInterface;
+class UStaticMesh;
 class FTileGrid;
 class UTileWorldSubsystem;
 class UTilesVisualDataSet;
@@ -45,6 +48,8 @@ protected:
 
 private:
 	void BuildChunk(const FTileGrid& InGrid, const FIntPoint& InChunk);
+	void BuildChunkCliffs(const FTileGrid& InGrid, const FIntPoint& InChunk, const FIntPoint& InFirst, const FIntPoint& InEnd);
+	UHierarchicalInstancedStaticMeshComponent* CreateChunkComponent(const FString& InBaseName, UStaticMesh* InMesh, UMaterialInterface* InMaterial);
 	void DestroyChunk(const FIntPoint& InChunk);
 	FBox GetChunkBounds(const FTileGrid& InGrid, const FIntPoint& InChunk) const;
 

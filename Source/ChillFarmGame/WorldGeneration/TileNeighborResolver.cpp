@@ -24,7 +24,8 @@ uint8 FTileNeighborResolver::ComputeSameTypeMask(const FTileGrid& InGrid, const 
 	for (const auto& [Offset, Side] : Neighbors)
 	{
 		const FTileData* Neighbor = InGrid.FindTile(InTile + Offset);
-		if (Neighbor && Neighbor->Type == Center->Type) Mask |= static_cast<uint8>(Side);
+		// A tile of the same type on another level is cut off by a cliff, so it does not continue the surface.
+		if (Neighbor && Neighbor->Type == Center->Type && Neighbor->Height == Center->Height) Mask |= static_cast<uint8>(Side);
 	}
 	return Mask;
 }

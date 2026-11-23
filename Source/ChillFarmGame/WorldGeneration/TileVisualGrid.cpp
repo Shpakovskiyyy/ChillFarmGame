@@ -1,6 +1,7 @@
 ﻿#include "TileVisualGrid.h"
 
 #include "TileGrid.h"
+#include "TileCliffs.h"
 #include "TileNeighborResolver.h"
 #include "TileWorldSubsystem.h"
 #include "TilesVisualDataSet.h"
@@ -157,29 +158,68 @@ void ATileVisualGrid::BuildChunk(const FTileGrid& InGrid, const FIntPoint& InChu
 			*UEnum::GetValueAsString(Key.VisualPositionType),
 			Key.bWatered ? TEXT("_Watered") : TEXT(""));
 
-		// A destroyed component keeps its name until garbage collection, so ask for a unique one.
-		const FName UniqueName = MakeUniqueObjectName(this, UHierarchicalInstancedStaticMeshComponent::StaticClass(), FName(*BaseName));
-		auto* Component = NewObject<UHierarchicalInstancedStaticMeshComponent>(this, UniqueName, RF_Transient);
-
-		// Configure everything before registering, so render and physics state are created once.
-		Component->SetMobility(EComponentMobility::Static);
-		Component->SetCollisionProfileName(TEXT("BlockAll"), true);
-		Component->SetCanEverAffectNavigation(true);
-		Component->SetStaticMesh(Variant->Mesh);
-		if (UMaterialInterface* Material = Variant->GetMaterial(Key.bWatered)) Component->SetMaterial(0, Material);
-
-		// Instance transforms are in world space: the tile layout, not this actor, decides where tiles are.
-		Component->SetUsingAbsoluteLocation(true);
-		Component->SetUsingAbsoluteRotation(true);
-		Component->SetUsingAbsoluteScale(true);
-		Component->SetupAttachment(RootComponent);
-		Component->SetRelativeTransform(FTransform::Identity);
-		Component->RegisterComponent();
-
+		UHierarchicalInstancedStaticMeshComponent* Component = CreateChunkComponent(BaseName, Variant->Mesh, Variant->GetMaterial(Key.bWatered));
 		Component->AddInstances(Transforms, /*bShouldReturnIndices*/ false, /*bWorldSpace*/ true);
 
 		Chunk.Meshes.Add(Key, Component);
 	}
+
+	BuildChunkCliffs(InGrid, InChunk, First, End);
+}
+
+void ATileVisualGrid::BuildChunkCliffs(const FTileGrid& InGrid, const FIntPoint& InChunk, const FIntPoint& InFirst, const FIntPoint& InEnd)
+{
+	TArray<FTileCliffFace> Faces;
+	TileCliffs::CollectFaces(InGrid, InFirst, InEnd, Faces);
+	if (Faces.IsEmpty()) return;
+
+	UStaticMesh* Mesh = TilesVisualSet->CliffMesh;
+	if (!Mesh)
+	{
+		UE_LOG(LogTileVisualGrid, Warning, TEXT("'%s' Has no cliff mesh, %d cliff sides in chunk (%d, %d) are not drawn"),
+			*GetNameSafe(TilesVisualSet), Faces.Num(), InChunk.X, InChunk.Y);
+		return;
+	}
+
+	const FTileGridLayout& Layout = InGrid.GetLayout();
+	const FBox MeshBounds = Mesh->GetBoundingBox();
+	const double Thickness = Layout.TileSize * TilesVisualSet->CliffThickness;
+
+	TArray<FTransform> Transforms;
+	Transforms.Reserve(Faces.Num());
+	for (const FTileCliffFace& Face : Faces)
+	{
+		Transforms.Add(TileCliffs::MakeWallTransform(Layout, Face, MeshBounds, Thickness));
+	}
+
+	UHierarchicalInstancedStaticMeshComponent* Component = CreateChunkComponent(
+		FString::Printf(TEXT("Chunk_X%d_Y%d_Cliffs"), InChunk.X, InChunk.Y), Mesh, TilesVisualSet->CliffMaterial);
+	Component->AddInstances(Transforms, /*bShouldReturnIndices*/ false, /*bWorldSpace*/ true);
+
+	Chunks.FindOrAdd(InChunk).Cliffs = Component;
+}
+
+UHierarchicalInstancedStaticMeshComponent* ATileVisualGrid::CreateChunkComponent(const FString& InBaseName, UStaticMesh* InMesh, UMaterialInterface* InMaterial)
+{
+	// A destroyed component keeps its name until garbage collection, so ask for a unique one.
+	const FName UniqueName = MakeUniqueObjectName(this, UHierarchicalInstancedStaticMeshComponent::StaticClass(), FName(*InBaseName));
+	auto* Component = NewObject<UHierarchicalInstancedStaticMeshComponent>(this, UniqueName, RF_Transient);
+
+	// Configure everything before registering, so render and physics state are created once.
+	Component->SetMobility(EComponentMobility::Static);
+	Component->SetCollisionProfileName(TEXT("BlockAll"), true);
+	Component->SetCanEverAffectNavigation(true);
+	Component->SetStaticMesh(InMesh);
+	if (InMaterial) Component->SetMaterial(0, InMaterial);
+
+	// Instance transforms are in world space: the tile layout, not this actor, decides where tiles are.
+	Component->SetUsingAbsoluteLocation(true);
+	Component->SetUsingAbsoluteRotation(true);
+	Component->SetUsingAbsoluteScale(true);
+	Component->SetupAttachment(RootComponent);
+	Component->SetRelativeTransform(FTransform::Identity);
+	Component->RegisterComponent();
+	return Component;
 }
 
 void ATileVisualGrid::DestroyChunk(const FIntPoint& InChunk)
@@ -191,6 +231,7 @@ void ATileVisualGrid::DestroyChunk(const FIntPoint& InChunk)
 	{
 		if (Component) Component->DestroyComponent();
 	}
+	if (Chunk->Cliffs) Chunk->Cliffs->DestroyComponent();
 	Chunks.Remove(InChunk);
 }
 
@@ -227,6 +268,7 @@ void ATileVisualGrid::FinalizeNavigation(const FBox& InDirtyArea)
 		{
 			if (Component) Component->BuildTreeIfOutdated(/*Async*/ false, /*ForceUpdate*/ false);
 		}
+		if (Chunk.Cliffs) Chunk.Cliffs->BuildTreeIfOutdated(/*Async*/ false, /*ForceUpdate*/ false);
 	}
 
 	if (auto* NavSys = FNavigationSystem::GetCurrent<UNavigationSystemV1>(GetWorld()))

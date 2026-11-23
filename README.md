@@ -17,10 +17,13 @@ All active development is happening on the `TerrainGenerationMVP` branch. This b
 ### Procedural World Generation
 `ATileWorldGenerator` builds the tile map from a seed by running a list of generation passes in order: terrain noise (height, moisture, water, elevation levels), biomes, tile types, terraces, shores, smoothing and fertility. Passes work on a plain `FTileGrid` without touching the world, so the same seed always gives the same map and the pipeline can be tested without a level.
 
-The map is drawn by `ATileVisualGrid` with Hierarchical Instanced Static Mesh components, one per autotile piece per chunk. The drawn map is not saved with the level; it is regenerated from the seed when the level opens.
+The map is drawn by `ATileVisualGrid` with Hierarchical Instanced Static Mesh components, one per autotile piece per chunk. Raised terraces get cliff sides, stretched from any mesh set on the visual data. The drawn map is not saved with the level; it is regenerated from the seed when the level opens.
 
 ### Tile System
 Each tile is six bytes of values: type, biome, elevation level, fertility, moisture and flags. `UTileWorldSubsystem` owns the live map and is the only way to change it at runtime (`MutateTile`); visuals and tools react to the changes it broadcasts.
+
+### Tilling and Watering
+Right-click a tile within reach of the character: grass and dirt become farmland, farmland gets watered. The rules are pure functions (`TileFarming`), and every change goes through `MutateTile` as a gameplay change.
 
 ### Tile Inspector (Editor Tool)
 A custom editor tool for inspecting and debugging the generated world.
@@ -62,5 +65,5 @@ ChillFarmGame/
 - Harvest and inventory
 - Store and economy loop
 - Save/load
-- Cliffs between elevation levels, ramps, rivers and roads
+- Ramps between elevation levels, rivers and roads (cliffs have a first version)
 - Farm site selection based on generated factors
