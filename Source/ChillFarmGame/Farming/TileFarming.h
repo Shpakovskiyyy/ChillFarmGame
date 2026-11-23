@@ -12,7 +12,7 @@
 // goes through the same path as everything else (history, visuals, a future save).
 namespace TileFarming
 {
-	// Grass and dirt can be tilled into farmland, unless something stands on them.
+	// Grass and dirt can be tilled into farmland, unless something stands on them or they are a slope.
 	CHILLFARMGAME_API bool CanTill(const FTileData& InTile);
 	CHILLFARMGAME_API FTileMutation MakeTill();
 

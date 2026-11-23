@@ -13,7 +13,7 @@ The architecture is judged against the game, not against general good practice. 
 | Game goal | What it requires from the world code |
 |---|---|
 | Cozy farming, "Stardew Valley in 3D" | Tiles are the unit of gameplay: every system (planting, building, walking) talks in tile coordinates. |
-| Varied terrain, not flat, no caves | Discrete elevation levels per tile (terraces), cliffs between levels, ramps. Farm tiles stay flat. |
+| Varied terrain, not flat, no caves | Discrete elevation levels per tile (terraces), joined by slopes in some places and cliffs in others, ramps where a terrace would be cut off. Farm tiles stay flat. |
 | Procedural world, player picks the farm site | Generation must produce meaningful differences between places (fertility, water, slope, distance to road) and be deterministic from a seed. |
 | Player edits tiles (till, water, build) | One safe way to change a tile at runtime, and a way for visuals and other systems to react. |
 | Learning project, done properly | Clear layers, testable logic, tools that explain the world (Tile Inspector). |
@@ -26,7 +26,7 @@ The architecture is judged against the game, not against general good practice. 
 ```mermaid
 flowchart TB
     subgraph Data["Data (plain C++)"]
-        TD[FTileData<br/>6 bytes per tile]
+        TD[FTileData<br/>7 bytes per tile]
         GL[FTileGridLayout<br/>tile ↔ world]
         TG[FTileGrid<br/>tiles + ApplyMutation]
         TM[FTileMutation<br/>what to change]
@@ -34,7 +34,7 @@ flowchart TB
 
     subgraph Gen["Generation (no world access)"]
         GC[FTileGenerationContext]
-        P1[Terrain] --> P2[Biomes] --> P3[Tile Types] --> P4[Terraces] --> P5[Shores] --> P6[Smoothing] --> P7[Fertility]
+        P1[Terrain] --> P2[Biomes] --> P3[Tile Types] --> P4[Terraces] --> P5[Shores] --> P6[Smoothing] --> P7[Fertility] --> P8[Slopes] --> P9[Ramps]
     end
 
     subgraph Runtime["World (runtime)"]
@@ -91,6 +91,8 @@ One per world (editor, PIE, game). Owns the live grid.
 | Shores | tile types, biome set | shore tile type next to water |
 | Smoothing | tile types, biome set | replaces isolated land tiles |
 | Fertility | final tile types, moisture, biome set | fertility = biome base × soil factor of the tile type × moisture factor |
+| Slopes | height levels, slope noise | raised corners on low tiles next to higher land where the noise is soft: runs of slope with edge and corner pieces, cliffs elsewhere (see D14) |
+| Ramps | height levels, slopes | an edge slope on a flat low tile wherever a terrace would otherwise be cut off (see D13) |
 
 Passes are `EditInlineNew`/`Instanced` objects, so each generator on a level has its own editable copies, and a new step is a new subclass. Passes only see the context: no world, no actors. Each pass gets its own random stream derived from seed + salt, so adding a pass does not reshuffle the others.
 
@@ -119,8 +121,9 @@ Automation specs live in `Source/ChillFarmGame/Tests`, grouped under `ChillFarmG
 | `BiomesAndRules` | Biome selection and blending, `FindBiome`, rule order and noise sources |
 | `Generation` | Generation context, `TileGeneration::RunPasses` (order, disabled passes, all-or-nothing setup check), each pass on hand-made grids, and the full pipeline: determinism, world invariants (no steep steps, shores are sand, water on level 0...), and replaying the recorded history rebuilds the exact final world |
 | `Subsystem` | `UTileWorldSubsystem` events, runtime edits, position lookup |
-| `Cliffs` | Which edges get a side (raised tiles, deeper drops, map edges, chunk ranges), wall placement for any mesh pivot |
-| `Farming` | Tilling and watering rules, the use action, a gameplay change reaching listeners with its step |
+| `Cliffs` | Which edges get a side (raised tiles, deeper drops, map edges, chunk ranges, slopes), wall and slope piece placement for any mesh pivot |
+| `Farming` | Tilling and watering rules (no farmland on slopes), the use action, a gameplay change reaching listeners with its step |
+| `Reachability` | Which neighbours can be stepped between (corner heights, slopes, water), walkable areas and land islands |
 
 Grids in tests are written as rows of characters (`G` grass, `W` water...) with `TileTestUtils::MakeGrid`, so the expected map is readable in the test itself. Equality checks use `TileTestUtils::TestEq`, which prints both values on failure and does not depend on engine-version-specific `TestEqual` overloads.
 
@@ -232,6 +235,23 @@ Each entry: what it was, what it is now, why, and what it costs.
 - **Why:** smallest step that makes elevation readable and blocks walking up a level, with no new art: any mesh works, a cube is fine. Visual only, so it can never disagree with the data.
 - **Cost:** a tall drop stretches one wall, so a textured cliff material would stretch too. Corners are plain overlaps, not shaped pieces. The dual-grid evaluation (roadmap step 1) still decides the final look; this version can be replaced inside `ATileVisualGrid` without touching data or passes.
 
+### D13. Ramps are a tile field, placed until every island can be walked
+
+- **Before:** terraces were cut off from each other by cliffs; nothing guaranteed the player could reach them.
+- **After:** a ramp is an edge slope (see D14): the two corners of the tile's edge towards the higher terrace are raised. `TileReachability` defines walking from the data alone (D14). The Ramps pass (last in the pipeline) labels the walkable areas, starts from the largest area of every land island and keeps placing a ramp (on a flat low tile with ground on its own level behind it, rising into a terrace whose edge is exactly one level up) between a reached and an unreached area, picking among valid places with the seed. After the Slopes pass it only has to cut into the cliffs that are left. Farmland cannot be made on a slope.
+- **Why:** a ramp is terrain, like height, so it lives in the tile data, is recorded in the history and is visible in the Inspector. Reachability is checked on data, so it is tested without navmesh or physics.
+- **Cost:** a slope rises one level over one tile. With the test map's 100-unit tiles and levels that is 45°, so the character's walkable floor angle and the navmesh's `AgentMaxSlope` are raised to 50°, and the navmesh step height to 45 (Recast warns, and leaves holes on steep slopes, when the step is too low for the slope). Gentler slopes over two tiles would need more data per tile. Islands that only water separates stay apart until bridges exist.
+
+### D14. Slopes are raised tile corners, mixed with cliffs by noise
+
+- **Before:** every change of level was a cliff, broken only by single ramp tiles (D13, first version).
+- **After:** `FTileData::Slope` (replacing `Ramp`, still seven bytes per tile) is a bitmask of `ETileCorner`: the corners that are one level above the tile's `Height`. Two corners of one edge make an edge slope, one corner an outer corner, three corners an inner corner (`TileData::GetSlopeShape`); opposite corners are never generated. The Slopes pass raises a corner of a low tile when a tile around that corner is land one level higher and a Perlin noise sampled at the corner is below `SlopeAmount`. All tiles around a corner read the same noise, so their surfaces agree at that corner. Tiles that would get opposite or all four corners (one-tile valleys) stay flat.
+  - Walking (`TileReachability::CanStep`): two neighbours connect when their surfaces meet at the same height at one or both ends of the edge they share. Flat tiles on one level always meet; a slope meets the ground it rises to; flat tiles a level apart do not. One end is enough on purpose: beside the foot of a ramp, or where a slope runs out into a cliff, the drop next to the shared corner is lower than a step.
+  - Cliffs (`TileCliffs::CollectFaces`): on every edge the side reaches from the lower of the tile's two corners down to the lower of the neighbour's. Where a slope runs out into a cliff, the higher ground's side reaches to the slope's low corner and its lower part is hidden inside the slope. A slope above lower flat ground draws no side: slope pieces must be solid and close their own sides.
+  - Drawing: the visual set has a mesh slot per shape (`SlopeEdgeMesh`, `SlopeOuterCornerMesh`, `SlopeInnerCornerMesh`) and which way each faces in its own space. Pieces are stretched to one tile by one level and turned with `TileCliffs::MakeSlopePieceTransform`, in the tile type's material. Fallbacks while slots are empty: an edge tilts the tile mesh (sides stay open), an inner corner is drawn as two edge pieces (solid, no gaps), an outer corner is drawn flat on its level.
+- **Why:** terraces read as hills in some places and as walls in others, and much more of the land can be walked without detours. Working on corners (marching squares) gives straight runs, inside and outside corners from one rule, and keeps the surfaces of neighbours consistent by construction.
+- **Cost:** the test project has only the edge piece (`SM_Ramp`). Until corner meshes exist, diagonal runs of slope look like a sawtooth (flat outer corners between wedges). Corner meshes must be solid and fit a 1 × 1 × 1 box: the outer corner is a tetrahedron whose base is the half of the square on the raised corner's side (cut along the diagonal between the two neighbouring corners) and whose tip is one level above the raised corner; the inner corner is the full box with the top corner above the low corner cut off, by the plane through the two neighbouring top corners and the low corner's bottom.
+
 ---
 
 ## 5. What I deliberately did not change
@@ -259,7 +279,7 @@ When you open the project after these commits:
 Nothing below was possible without an Unreal toolchain.
 
 1. Build `ChillFarmGameEditor` (Development Editor). Fix anything the compiler finds; the most likely spots are engine API signatures in `TileVisualGrid.cpp`, `ViewportMouseClickNotifier.cpp` and `STileInspectorWindow.cpp`.
-2. Session Frontend → Automation → run `ChillFarmGame.TileWorld` (113 specs, see section 2.6).
+2. Session Frontend → Automation → run `ChillFarmGame.TileWorld` (143 specs, see section 2.6).
 3. Open the test map: the world appears without pressing Generate.
 4. Click a tile: yellow box on that tile, inspector shows type/biome/fertility/moisture and readable history.
 5. Click inside the Tile Inspector tab while it overlaps the viewport: nothing gets selected.
@@ -272,8 +292,8 @@ Nothing below was possible without an Unreal toolchain.
 
 Ordered so each step is visible and testable on its own, and nothing already working is thrown away.
 
-1. **Cliffs.** First version done (D12): stretched walls per edge. Still to evaluate for the final look: Evaluate the dual grid: the visual grid is offset by half a tile and each visual tile reads its four corners (marching squares), which needs about six shapes instead of the current 8-neighbour piece set and handles both surface transitions and cliffs. The neighbour mask must also treat a same-type neighbour at another level as different.
-2. **Ramps and reachability.** A pass that places ramps between terraces and a flood fill that guarantees every land area is reachable from the road.
+1. **Cliffs and slopes.** First versions done (D12, D14): stretched walls per edge, corner-based slopes mixed in by noise. Missing: outer and inner corner meshes (D14 says what they must look like). Still to evaluate for the final look: Evaluate the dual grid: the visual grid is offset by half a tile and each visual tile reads its four corners (marching squares), which needs about six shapes instead of the current 8-neighbour piece set and handles both surface transitions and cliffs. The neighbour mask must also treat a same-type neighbour at another level as different.
+2. **Ramps and reachability.** Done (D13, D14): slopes join much of the land, and the Ramps pass joins every remaining terrace to the rest of its island. Once roads exist, start the flood fill from the road instead of the largest area.
 3. **Water.** Rivers carved downhill as a pass; water level per lake instead of a global threshold.
 4. **Roads and farm sites.** A* road pass over a cost field (slope, water, biome). Derived per-tile fields with breadth-first distance transforms: distance to water, to road, size of the flat area. A scoring pass that rates farm sites and a validation pass that guarantees enough good ones. The inspector overlay for these fields is the prototype of the player's site selection screen.
 5. **Gameplay edits.** Tilling and watering are in (`TileFarming`, right mouse, `ETileType::Farmland`, `ETileFlags::Watered`); building is next. All through `UTileWorldSubsystem::MutateTile` with `ETileMutationSource::Gameplay`. Keep crops, buildings and items out of `FTileData`: they are sparse objects keyed by tile coordinate in their own systems, which listen to tile changes.

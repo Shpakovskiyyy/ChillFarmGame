@@ -34,7 +34,7 @@ namespace TileTestUtils
 		if (InFields == ETileField::None) return TEXT("None");
 
 		FString Result;
-		for (const ETileField Field : { ETileField::Type, ETileField::Biome, ETileField::Height, ETileField::Fertility, ETileField::Moisture, ETileField::Flags })
+		for (const ETileField Field : { ETileField::Type, ETileField::Biome, ETileField::Height, ETileField::Slope, ETileField::Fertility, ETileField::Moisture, ETileField::Flags })
 		{
 			if (!EnumHasAnyFlags(InFields, Field)) continue;
 			if (!Result.IsEmpty()) Result += TEXT("|");
@@ -42,6 +42,21 @@ namespace TileTestUtils
 		}
 		return Result;
 	}
+
+	inline FString ToTestString(ETileSlopeShape InShape)
+	{
+		switch (InShape)
+		{
+			case ETileSlopeShape::Flat:        return TEXT("Flat");
+			case ETileSlopeShape::Edge:        return TEXT("Edge");
+			case ETileSlopeShape::OuterCorner: return TEXT("OuterCorner");
+			case ETileSlopeShape::InnerCorner: return TEXT("InnerCorner");
+			default:                           return TEXT("Invalid");
+		}
+	}
+
+	// A slope mask from corners: Corners(ETileCorner::NorthWest | ETileCorner::NorthEast).
+	inline uint8 Corners(ETileCorner InCorners) { return static_cast<uint8>(InCorners); }
 
 	// Reflected (UENUM) enums print their value name.
 	template <typename EnumType>

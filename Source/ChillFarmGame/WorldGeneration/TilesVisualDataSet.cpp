@@ -29,8 +29,32 @@ EDataValidationResult UTilesVisualDataSet::IsDataValid(FDataValidationContext& C
 		}
 	}
 
+	if (!SlopeOuterCornerMesh || !SlopeInnerCornerMesh)
+	{
+		Context.AddWarning(LOCTEXT("MissingSlopeCorners", "A slope corner mesh is empty: outer corners are drawn flat and inner corners from two edge pieces until one is set."));
+	}
+
 	return Result;
 }
 #endif
+
+UStaticMesh* UTilesVisualDataSet::GetSlopeMesh(ETileSlopeShape InShape, FIntPoint& OutMeshFacing) const
+{
+	switch (InShape)
+	{
+		case ETileSlopeShape::Edge:
+			OutMeshFacing = TileData::GetDirectionOffset(SlopeEdgeMeshRisesTowards);
+			return SlopeEdgeMesh;
+		case ETileSlopeShape::OuterCorner:
+			OutMeshFacing = TileData::GetCornerOffset(SlopeOuterCornerMeshRaisedCorner);
+			return SlopeOuterCornerMesh;
+		case ETileSlopeShape::InnerCorner:
+			OutMeshFacing = TileData::GetCornerOffset(SlopeInnerCornerMeshLowCorner);
+			return SlopeInnerCornerMesh;
+		default:
+			OutMeshFacing = FIntPoint::ZeroValue;
+			return nullptr;
+	}
+}
 
 #undef LOCTEXT_NAMESPACE

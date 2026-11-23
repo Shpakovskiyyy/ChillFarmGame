@@ -47,9 +47,16 @@ void FTileFarmingSpec::Define()
 			TestFalse(TEXT("Not generated"), TileFarming::CanTill(FTileData()));
 		});
 
-		It("does not till under something that stands on the tile", [this]()
+		It("does not till under something that stands on the tile, or on a slope", [this]()
 		{
 			TestFalse(TEXT("Occupied grass"), TileFarming::CanTill(MakeTile(ETileType::Grass, ETileFlags::Occupied)));
+
+			FTileData Slope = MakeTile(ETileType::Grass);
+			Slope.Slope = TileData::MakeEdgeSlope(FIntPoint(1, 0));
+			TestFalse(TEXT("Grass slope"), TileFarming::CanTill(Slope));
+
+			Slope.Slope = static_cast<uint8>(ETileCorner::SouthWest);
+			TestFalse(TEXT("Grass corner"), TileFarming::CanTill(Slope));
 		});
 
 		It("turns the tile into farmland and keeps the rest of the land", [this]()

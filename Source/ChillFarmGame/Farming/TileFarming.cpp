@@ -5,7 +5,8 @@ namespace TileFarming
 {
 	bool CanTill(const FTileData& InTile)
 	{
-		if (InTile.HasFlag(ETileFlags::Occupied)) return false;
+		// Farmland stays flat: a field on a slope would be one nobody can stand level on.
+		if (InTile.HasFlag(ETileFlags::Occupied) || InTile.IsSlope()) return false;
 		return InTile.Type == ETileType::Grass || InTile.Type == ETileType::Dirt;
 	}
 

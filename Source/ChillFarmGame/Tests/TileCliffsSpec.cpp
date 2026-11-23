@@ -100,6 +100,36 @@ void FTileCliffsSpec::Define()
 			TestEq(*this, TEXT("Faces of tile (1, 0)"), Faces.Num(), 4);
 		});
 
+		It("leaves the edge open where a slope rises to the tile", [this]()
+		{
+			FTileGrid Grid = MakeGrid({ TEXT("GGG"), TEXT("GGG"), TEXT("GGG") });
+			SetHeights(Grid, { TEXT("000"), TEXT("010"), TEXT("000") });
+			Grid.ApplyMutation(FIntPoint(1, 2), FTileMutation().SetSlope(TileData::MakeEdgeSlope(FIntPoint(0, -1))));
+
+			const TArray<FTileCliffFace> Faces = CollectAll(Grid);
+			TestEq(*this, TEXT("Faces"), Faces.Num(), 3);
+			TestFalse(TEXT("No side towards the slope"), Faces.Contains(FTileCliffFace{ FIntPoint(1, 1), FIntPoint(0, 1), 1, 0 }));
+		});
+
+		It("reaches down to a slope's low corner where the slope runs out into a cliff", [this]()
+		{
+			// The slope at (0, 1) rises north; the higher tile (1, 1) is beside it, so only the
+			// north-east corner meets.
+			FTileGrid Grid = MakeGrid({ TEXT("GG"), TEXT("GG") });
+			SetHeights(Grid, { TEXT("11"), TEXT("01") });
+			Grid.ApplyMutation(FIntPoint(0, 1), FTileMutation().SetSlope(TileData::MakeEdgeSlope(FIntPoint(0, -1))));
+
+			const TArray<FTileCliffFace> Faces = CollectAll(Grid);
+			TestTrue(TEXT("Higher ground beside the slope"), Faces.Contains(FTileCliffFace{ FIntPoint(1, 1), FIntPoint(-1, 0), 1, 0 }));
+			TestFalse(TEXT("No side above the slope"), Faces.Contains(FTileCliffFace{ FIntPoint(0, 0), FIntPoint(0, 1), 1, 0 }));
+
+			// The slope itself: its low end is on its own level, its sides close themselves.
+			for (const FTileCliffFace& Face : Faces)
+			{
+				TestFalse(TEXT("No side from the slope"), Face.Tile == FIntPoint(0, 1));
+			}
+		});
+
 		It("skips tiles that are not generated", [this]()
 		{
 			FTileGrid Grid = MakeGrid({ TEXT("G.") });
@@ -131,6 +161,49 @@ void FTileCliffsSpec::Define()
 			const FBox Wall = CornerPivot.TransformBy(TileCliffs::MakeWallTransform(Layout, North, CornerPivot, 10.0));
 			TestTrue(TEXT("Min"), IsNear(Wall.Min, FVector(100.0, 100.0, 0.0)));
 			TestTrue(TEXT("Max"), IsNear(Wall.Max, FVector(200.0, 110.0, 49.5)));
+		});
+
+		It("tilts a flat tile mesh into a ramp from its level to the next", [this, Layout]()
+		{
+			// A flat plate whose top face is at Z = 0, centred on its pivot.
+			const FBox Plate(FVector(-50.0, -50.0, -1.0), FVector(50.0, 50.0, 0.0));
+			const FTransform Transform = TileCliffs::MakeTiltedTileTransform(Layout, FIntPoint(1, 1), 2, FIntPoint(1, 0), Plate);
+
+			// Middle of the top face's low and high edges (test layout: 100 per tile, 50 per level).
+			TestTrue(TEXT("Low edge"), IsNear(Transform.TransformPosition(FVector(-50.0, 0.0, 0.0)), FVector(100.0, 150.0, 100.0)));
+			TestTrue(TEXT("High edge"), IsNear(Transform.TransformPosition(FVector(50.0, 0.0, 0.0)), FVector(200.0, 150.0, 150.0)));
+			TestTrue(TEXT("Side"), IsNear(Transform.TransformPosition(FVector(0.0, 50.0, 0.0)), FVector(150.0, 200.0, 125.0)));
+		});
+
+		It("turns the ramp towards its direction", [this, Layout]()
+		{
+			const FBox Plate(FVector(-50.0, -50.0, -1.0), FVector(50.0, 50.0, 0.0));
+			const FTransform North = TileCliffs::MakeTiltedTileTransform(Layout, FIntPoint(1, 1), 0, FIntPoint(0, -1), Plate);
+
+			// North is -Y: the high edge is on the tile's north side.
+			TestTrue(TEXT("High edge"), IsNear(North.TransformPosition(FVector(50.0, 0.0, 0.0)), FVector(150.0, 100.0, 50.0)));
+			TestTrue(TEXT("Low edge"), IsNear(North.TransformPosition(FVector(-50.0, 0.0, 0.0)), FVector(150.0, 200.0, 0.0)));
+		});
+
+		It("fits a wedge mesh into the slope tile, turned to the slope's direction", [this, Layout]()
+		{
+			// Like LevelPrototyping's SM_Ramp: a 100 cube box, high at Y = 0, low at Y = 100 (rises north).
+			const FBox Wedge(FVector(0.0), FVector(100.0));
+			const FTransform East = TileCliffs::MakeSlopePieceTransform(Layout, FIntPoint(1, 1), 2, FIntPoint(1, 0), Wedge, FIntPoint(0, -1));
+
+			TestTrue(TEXT("High edge on the east side, one level up"), IsNear(East.TransformPosition(FVector(50.0, 0.0, 100.0)), FVector(200.0, 150.0, 150.0)));
+			TestTrue(TEXT("Low edge on the west side, on the tile's level"), IsNear(East.TransformPosition(FVector(50.0, 100.0, 0.0)), FVector(100.0, 150.0, 100.0)));
+			TestTrue(TEXT("Fills the tile"), Wedge.TransformBy(East).Equals(FBox(FVector(100.0, 100.0, 100.0), FVector(200.0, 200.0, 150.0)), 0.01));
+		});
+
+		It("turns a corner piece from its own raised corner to the slope's", [this, Layout]()
+		{
+			// A corner piece in a 100 cube box whose raised corner is north-east (max X, min Y).
+			const FBox Piece(FVector(0.0), FVector(100.0));
+			const FTransform SouthWest = TileCliffs::MakeSlopePieceTransform(Layout, FIntPoint(1, 1), 0, FIntPoint(-1, 1), Piece, FIntPoint(1, -1));
+
+			TestTrue(TEXT("Raised corner on the south-west, one level up"), IsNear(SouthWest.TransformPosition(FVector(100.0, 0.0, 100.0)), FVector(100.0, 200.0, 50.0)));
+			TestTrue(TEXT("Fills the tile"), Piece.TransformBy(SouthWest).Equals(FBox(FVector(100.0, 100.0, 0.0), FVector(200.0, 200.0, 50.0)), 0.01));
 		});
 
 		It("starts at the lower level, not at the ground", [this, Layout]()

@@ -60,7 +60,8 @@ void AChillFarmGameGameMode::BeginPlayDeferred()
 	}
 
 	constexpr double SpawnClearance = 2.0;
-	FVector Location = TileWorld->GetLayout().TileCenter(TileCoordinates, Tile->Height);
+	// The top of the tile, so a slope's surface is never above the spawn point.
+	FVector Location = TileWorld->GetLayout().TileCenter(TileCoordinates, TileData::GetTopLevel(*Tile));
 	Location.Z += PawnClass->GetDefaultObject<APawn>()->GetDefaultHalfHeight() + SpawnClearance;
 	const FTransform SpawnTransform(FRotator(0.0, Start->GetActorRotation().Yaw, 0.0), Location);
 

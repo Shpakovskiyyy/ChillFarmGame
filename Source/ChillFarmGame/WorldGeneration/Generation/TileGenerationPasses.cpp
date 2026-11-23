@@ -2,6 +2,7 @@
 
 #include "Generation/TileGenerationContext.h"
 #include "TileAlgorithms.h"
+#include "TileReachability.h"
 #include "TileNoiseContext.h"
 #include "BiomeTypeData.h"
 #include "BiomeTypeDataSet.h"
@@ -18,6 +19,19 @@ namespace
 	const UBiomeTypeData* FindBiome(const FTileGenerationContext& Context, EBiomeType InType)
 	{
 		return Context.Biomes ? Context.Biomes->FindBiome(InType) : nullptr;
+	}
+
+	// Whether both corners of the tile's edge towards InOffset are at InLevel.
+	bool IsEdgeAtLevel(const FTileData& InTile, const FIntPoint& InOffset, int32 InLevel)
+	{
+		ETileCorner First, Second;
+		TileData::GetEdgeCorners(InOffset, First, Second);
+		return TileData::GetCornerLevel(InTile, First) == InLevel && TileData::GetCornerLevel(InTile, Second) == InLevel;
+	}
+
+	bool CanChangeShape(const FTileData& InTile)
+	{
+		return TileReachability::IsWalkable(InTile) && !InTile.HasFlag(ETileFlags::Occupied);
 	}
 }
 
@@ -291,5 +305,166 @@ void UFertilityPass::Execute(FTileGenerationContext& Context) const
 		const float Fertility = BaseFertility * Soil * MoistureFactor;
 		Context.Mutate(Tile, FTileMutation().SetFertility(TileData::ToPercent(Fertility / 100.f)),
 			Soil > 0.f ? FName(TEXT("Biome, soil and moisture")) : FName(TEXT("Nothing grows on this surface")));
+	}
+}
+
+
+/* Slopes */
+
+void USlopePass::Execute(FTileGenerationContext& Context) const
+{
+	const FTileGrid& Grid = Context.Grid;
+	const FTileGridLayout& Layout = Context.GetLayout();
+
+	FRandomStream Stream = Context.MakeStream(0x51097E5Au);
+	const FVector2D NoiseOffset(Stream.FRandRange(0.f, SeedOffsetRange), Stream.FRandRange(0.f, SeedOffsetRange));
+
+	// Corners are numbered like tiles: corner (X, Y) is the north-west corner of tile (X, Y).
+	const auto IsSoft = [this, &NoiseOffset](const FIntPoint& InCorner)
+	{
+		return Perlin01(FVector2D(InCorner.X * NoiseScale + NoiseOffset.X, InCorner.Y * NoiseScale + NoiseOffset.Y)) < SlopeAmount;
+	};
+
+	// Every tile is decided from the grid as it was before the pass: only Slope changes, and no
+	// decision reads it, so the order does not matter.
+	TArray<TPair<FIntPoint, uint8>> Slopes;
+	for (int32 Index = 0; Index < Layout.NumTiles(); ++Index)
+	{
+		const FIntPoint Tile = Layout.ToTile(Index);
+		const FTileData& Data = Grid.GetTile(Tile);
+		if (!CanChangeShape(Data) || Data.IsSlope()) continue;
+
+		uint8 Mask = 0;
+		for (const ETileCorner Corner : TileData::AllCorners)
+		{
+			// The three other tiles that share this corner.
+			const FIntPoint Toward = TileData::GetCornerOffset(Corner);
+			const FIntPoint Around[] = { Tile + FIntPoint(Toward.X, 0), Tile + FIntPoint(0, Toward.Y), Tile + Toward };
+
+			bool bNextToHigher = false;
+			for (const FIntPoint& Other : Around)
+			{
+				const FTileData* OtherData = Grid.FindTile(Other);
+				bNextToHigher |= OtherData && TileReachability::IsWalkable(*OtherData) && OtherData->Height == Data.Height + 1;
+			}
+			if (!bNextToHigher) continue;
+
+			const FIntPoint CornerPoint(Tile.X + (Toward.X > 0 ? 1 : 0), Tile.Y + (Toward.Y > 0 ? 1 : 0));
+			if (IsSoft(CornerPoint)) Mask |= static_cast<uint8>(Corner);
+		}
+
+		const ETileSlopeShape Shape = TileData::GetSlopeShape(Mask);
+		if (Shape == ETileSlopeShape::Flat || Shape == ETileSlopeShape::Invalid) continue;
+		Slopes.Add({ Tile, Mask });
+	}
+
+	for (const auto& [Tile, Mask] : Slopes)
+	{
+		const ETileSlopeShape Shape = TileData::GetSlopeShape(Mask);
+		const TCHAR* Reason = Shape == ETileSlopeShape::Edge ? TEXT("Slopes up to the higher ground")
+			: Shape == ETileSlopeShape::OuterCorner ? TEXT("Rounds the outside of a hill's corner")
+			: TEXT("Fills the inside of a hill's corner");
+		Context.Mutate(Tile, FTileMutation().SetSlope(Mask), Reason);
+	}
+}
+
+
+/* Ramps */
+
+void URampPass::Execute(FTileGenerationContext& Context) const
+{
+	const FTileGrid& Grid = Context.Grid;
+	const FTileGridLayout& Layout = Context.GetLayout();
+
+	TArray<int32> Regions;
+	const int32 NumRegions = TileReachability::ComputeWalkRegions(Grid, Regions);
+	if (NumRegions <= 1) return;
+
+	// Every island starts from its largest area (the lowest index wins a tie, so it is deterministic).
+	// Ramps never cross water, so an island that is not given a start of its own would never be joined.
+	TArray<int32> Islands;
+	const int32 NumIslands = TileReachability::ComputeLandIslands(Grid, Islands);
+
+	TArray<int32> RegionSizes;
+	RegionSizes.Init(0, NumRegions);
+	TArray<int32> RegionIsland;
+	RegionIsland.Init(INDEX_NONE, NumRegions);
+	for (int32 Index = 0; Index < Regions.Num(); ++Index)
+	{
+		if (Regions[Index] == INDEX_NONE) continue;
+		++RegionSizes[Regions[Index]];
+		RegionIsland[Regions[Index]] = Islands[Index];
+	}
+
+	TArray<int32> IslandStart;
+	IslandStart.Init(INDEX_NONE, NumIslands);
+	for (int32 Region = 0; Region < NumRegions; ++Region)
+	{
+		int32& Start = IslandStart[RegionIsland[Region]];
+		if (Start == INDEX_NONE || RegionSizes[Region] > RegionSizes[Start]) Start = Region;
+	}
+
+	// Every place a ramp could join two different areas: a flat land tile with higher ground in front
+	// of it, whose edge is one level up, and ground behind it on the tile's own level, so the ramp
+	// can be walked onto.
+	struct FCandidate
+	{
+		FIntPoint Tile;
+		FIntPoint Offset;
+		int32 LowRegion;
+		int32 HighRegion;
+	};
+	const auto CanPlace = [&Grid](const FIntPoint& InTile, const FIntPoint& InOffset)
+	{
+		const FTileData& Data = Grid.GetTile(InTile);
+		const FTileData* High = Grid.FindTile(InTile + InOffset);
+		const FTileData* Back = Grid.FindTile(InTile - InOffset);
+		return CanChangeShape(Data) && !Data.IsSlope()
+			&& High && TileReachability::IsWalkable(*High) && IsEdgeAtLevel(*High, FIntPoint::ZeroValue - InOffset, Data.Height + 1)
+			&& Back && TileReachability::IsWalkable(*Back) && IsEdgeAtLevel(*Back, InOffset, Data.Height);
+	};
+
+	TArray<FCandidate> Candidates;
+	for (int32 Index = 0; Index < Layout.NumTiles(); ++Index)
+	{
+		const FIntPoint Tile = Layout.ToTile(Index);
+		if (Regions[Index] == INDEX_NONE) continue;
+
+		for (const FIntPoint& Offset : FTileGrid::GetCardinalOffsets())
+		{
+			if (!CanPlace(Tile, Offset)) continue;
+
+			const int32 HighRegion = Regions[Layout.ToIndex(Tile + Offset)];
+			if (HighRegion == Regions[Index]) continue;
+			Candidates.Add({ Tile, Offset, Regions[Index], HighRegion });
+		}
+	}
+
+	TArray<bool> Reached;
+	Reached.Init(false, NumRegions);
+	for (const int32 Start : IslandStart) Reached[Start] = true;
+
+	FRandomStream Stream = Context.MakeStream(0x4A3B9001u);
+	TArray<int32> Valid;
+	while (true)
+	{
+		Valid.Reset();
+		for (int32 Index = 0; Index < Candidates.Num(); ++Index)
+		{
+			const FCandidate& Candidate = Candidates[Index];
+			if (Reached[Candidate.LowRegion] == Reached[Candidate.HighRegion]) continue;
+			// An earlier ramp may have used the tile, or the ground in front of or behind it.
+			if (!CanPlace(Candidate.Tile, Candidate.Offset)) continue;
+			Valid.Add(Index);
+		}
+		if (Valid.IsEmpty()) break;
+
+		// Any valid place joins one more area; picking from the seed spreads ramps around instead of
+		// always using the first edge in grid order.
+		const FCandidate& Chosen = Candidates[Valid[Stream.RandRange(0, Valid.Num() - 1)]];
+		Context.Mutate(Chosen.Tile, FTileMutation().SetSlope(TileData::MakeEdgeSlope(Chosen.Offset)), TEXT("Joins a terrace to the rest of the land"));
+
+		Reached[Chosen.LowRegion] = true;
+		Reached[Chosen.HighRegion] = true;
 	}
 }

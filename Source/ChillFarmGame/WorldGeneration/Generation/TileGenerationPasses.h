@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
 #include "Generation/TileGenerationPass.h"
@@ -134,4 +134,53 @@ public:
 	// Moisture factor of a completely wet tile (moisture 100%). Values in between are interpolated.
 	UPROPERTY(EditAnywhere, Category = "Moisture", meta = (ClampMin = "0"))
 	float WetFactor = 1.2f;
+};
+
+// Softens the terraces: where land meets land one level higher, the lower tile can slope up to it
+// instead of ending in a cliff. Works on tile corners (see FTileData::Slope): a corner of a low tile is
+// raised when one of the tiles around it is land one level higher and a noise field sampled at the
+// corner says "soft" there. All tiles around a corner read the same noise, so they agree on its
+// height and their surfaces meet. Runs of slope, with edge, inner and outer corner pieces, follow the
+// noise; elsewhere cliffs stay.
+// A tile that would end up with opposite corners raised (a one-tile valley or a saddle), or with all
+// four, stays flat. Water, and tiles something stands on, never slope.
+UCLASS(meta = (DisplayName = "Slopes"))
+class CHILLFARMGAME_API USlopePass : public UTileGenerationPass
+{
+	GENERATED_BODY()
+
+public:
+	virtual void Execute(FTileGenerationContext& Context) const override;
+	virtual FName GetStepName() const override { return TEXT("Slopes"); }
+
+public:
+	// Perlin sampling scale of the slope noise, per tile. Smaller values give longer runs of slope and of cliff.
+	UPROPERTY(EditAnywhere, Category = "Slopes", meta = (ClampMin = "0.0001"))
+	float NoiseScale = 0.12f;
+
+	// A corner is soft where the noise (0..1) is below this. 0 keeps every cliff, 1 turns every cliff
+	// that can be one into a slope.
+	UPROPERTY(EditAnywhere, Category = "Slopes", meta = (ClampMin = "0", ClampMax = "1"))
+	float SlopeAmount = 0.5f;
+
+	// Range of the random noise offset derived from the seed.
+	UPROPERTY(EditAnywhere, Category = "Slopes", meta = (ClampMin = "1"))
+	float SeedOffsetRange = 1000.f;
+};
+
+// Joins the terraces so every piece of land can be walked to: finds the walkable areas (see
+// TileReachability), starts from the largest one on each island and keeps placing a ramp between a
+// reached and an unreached area until no more can be joined. A ramp is an edge slope on a flat lower
+// tile, rising to the higher one, with flat ground behind it to walk on from. Land that only water
+// separates stays apart.
+// Runs after Slopes, so it only cuts into the cliffs that are left, and after Fertility: slopes and
+// ramps keep the tile's type, so they do not change how it is rated.
+UCLASS(meta = (DisplayName = "Ramps"))
+class CHILLFARMGAME_API URampPass : public UTileGenerationPass
+{
+	GENERATED_BODY()
+
+public:
+	virtual void Execute(FTileGenerationContext& Context) const override;
+	virtual FName GetStepName() const override { return TEXT("Ramps"); }
 };

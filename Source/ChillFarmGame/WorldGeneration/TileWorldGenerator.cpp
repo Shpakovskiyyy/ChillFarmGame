@@ -30,6 +30,8 @@ ATileWorldGenerator::ATileWorldGenerator()
 	Passes.Add(CreateDefaultSubobject<UShorePass>(TEXT("ShorePass")));
 	Passes.Add(CreateDefaultSubobject<UTileSmoothingPass>(TEXT("SmoothingPass")));
 	Passes.Add(CreateDefaultSubobject<UFertilityPass>(TEXT("FertilityPass")));
+	Passes.Add(CreateDefaultSubobject<USlopePass>(TEXT("SlopePass")));
+	Passes.Add(CreateDefaultSubobject<URampPass>(TEXT("RampPass")));
 }
 
 FTileGridLayout ATileWorldGenerator::MakeLayout() const

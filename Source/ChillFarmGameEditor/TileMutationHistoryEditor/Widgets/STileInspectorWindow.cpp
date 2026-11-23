@@ -28,6 +28,7 @@ namespace TileInspector
 		Type,
 		Biome,
 		Height,
+		Slope,
 		Fertility,
 		Moisture,
 		Flags,
@@ -35,7 +36,30 @@ namespace TileInspector
 		Count
 	};
 
-	const ETileField AllFields[] = { ETileField::Type, ETileField::Biome, ETileField::Height, ETileField::Fertility, ETileField::Moisture, ETileField::Flags };
+	const ETileField AllFields[] = { ETileField::Type, ETileField::Biome, ETileField::Height, ETileField::Slope, ETileField::Fertility, ETileField::Moisture, ETileField::Flags };
+
+	// "north", "south-east"... for a facing from TileData::GetSlopeFacing.
+	FText FormatFacing(const FIntPoint& InFacing)
+	{
+		const FText NorthSouth = InFacing.Y < 0 ? LOCTEXT("North", "north") : InFacing.Y > 0 ? LOCTEXT("South", "south") : FText::GetEmpty();
+		const FText EastWest = InFacing.X > 0 ? LOCTEXT("East", "east") : InFacing.X < 0 ? LOCTEXT("West", "west") : FText::GetEmpty();
+		if (NorthSouth.IsEmpty()) return EastWest;
+		if (EastWest.IsEmpty()) return NorthSouth;
+		return FText::Format(LOCTEXT("Diagonal", "{0}-{1}"), NorthSouth, EastWest);
+	}
+
+	FText FormatSlope(uint8 InSlope)
+	{
+		const FText Facing = FormatFacing(TileData::GetSlopeFacing(InSlope));
+		switch (TileData::GetSlopeShape(InSlope))
+		{
+			case ETileSlopeShape::Flat:        return LOCTEXT("Flat", "Flat");
+			case ETileSlopeShape::Edge:        return FText::Format(LOCTEXT("SlopeEdge", "Rises {0}"), Facing);
+			case ETileSlopeShape::OuterCorner: return FText::Format(LOCTEXT("SlopeOuter", "Outer corner, raised {0}"), Facing);
+			case ETileSlopeShape::InnerCorner: return FText::Format(LOCTEXT("SlopeInner", "Inner corner, low {0}"), Facing);
+			default:                           return FText::Format(LOCTEXT("SlopeInvalid", "Invalid (corners {0})"), FText::AsNumber(InSlope));
+		}
+	}
 
 	FText FormatField(ETileField InField, const FTileData& InTile)
 	{
@@ -47,6 +71,8 @@ namespace TileInspector
 				return InTile.Biome == EBiomeType::EBiomeType_MAX ? LOCTEXT("NoBiome", "None") : UEnum::GetDisplayValueAsText(InTile.Biome);
 			case ETileField::Height:
 				return FText::AsNumber(InTile.Height);
+			case ETileField::Slope:
+				return FormatSlope(InTile.Slope);
 			case ETileField::Fertility:
 			case ETileField::Moisture:
 				return FText::Format(LOCTEXT("Percent", "{0}%"), FText::AsNumber(InField == ETileField::Fertility ? InTile.Fertility : InTile.Moisture));
@@ -141,6 +167,7 @@ TSharedRef<SWidget> STileInspectorWindow::BuildOverviewSection()
 		{ TileInspector::Type,        LOCTEXT("TypeLabel", "Type") },
 		{ TileInspector::Biome,       LOCTEXT("BiomeLabel", "Biome") },
 		{ TileInspector::Height,      LOCTEXT("HeightLabel", "Height level") },
+		{ TileInspector::Slope,       LOCTEXT("SlopeLabel", "Slope") },
 		{ TileInspector::Fertility,   LOCTEXT("FertilityLabel", "Fertility") },
 		{ TileInspector::Moisture,    LOCTEXT("MoistureLabel", "Moisture") },
 		{ TileInspector::Flags,       LOCTEXT("FlagsLabel", "Flags") },
@@ -269,6 +296,7 @@ void STileInspectorWindow::Refresh()
 		OverviewValues[TileInspector::Type] = TileInspector::FormatField(ETileField::Type, *Tile);
 		OverviewValues[TileInspector::Biome] = TileInspector::FormatField(ETileField::Biome, *Tile);
 		OverviewValues[TileInspector::Height] = TileInspector::FormatField(ETileField::Height, *Tile);
+		OverviewValues[TileInspector::Slope] = TileInspector::FormatField(ETileField::Slope, *Tile);
 		OverviewValues[TileInspector::Fertility] = TileInspector::FormatField(ETileField::Fertility, *Tile);
 		OverviewValues[TileInspector::Moisture] = TileInspector::FormatField(ETileField::Moisture, *Tile);
 		OverviewValues[TileInspector::Flags] = TileInspector::FormatField(ETileField::Flags, *Tile);

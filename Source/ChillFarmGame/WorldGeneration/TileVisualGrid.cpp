@@ -107,8 +107,15 @@ void ATileVisualGrid::BuildChunk(const FTileGrid& InGrid, const FIntPoint& InChu
 	{
 		FIntPoint Tile;
 		int32 Rotation;
+		uint8 Slope;
 	};
 	TMap<FTileVisualKey, TArray<FPlacedTile>> TilesByKey;
+
+	// Slopes the visual set has a piece for, per shape. Edge, OuterCorner and InnerCorner.
+	constexpr int32 NumPieceShapes = 3;
+	const ETileSlopeShape PieceShapes[NumPieceShapes] = { ETileSlopeShape::Edge, ETileSlopeShape::OuterCorner, ETileSlopeShape::InnerCorner };
+	TMap<FTileVisualKey, TArray<FPlacedTile>> SlopePiecesByKey[NumPieceShapes];
+
 	for (int32 Y = First.Y; Y < End.Y; ++Y)
 	{
 		for (int32 X = First.X; X < End.X; ++X)
@@ -117,9 +124,34 @@ void ATileVisualGrid::BuildChunk(const FTileGrid& InGrid, const FIntPoint& InChu
 			const FTileData& Data = InGrid.GetTile(Tile);
 			if (!Data.IsGenerated()) continue;
 
-			FTileVisualKey Key = FTileNeighborResolver::Resolve(Data.Type, FTileNeighborResolver::ComputeSameTypeMask(InGrid, Tile));
+			// A slope is drawn with the plain centre piece's material: edge pieces would not line up with it.
+			FTileVisualKey Key = Data.IsSlope()
+				? FTileNeighborResolver::Resolve(Data.Type, 0xFF)
+				: FTileNeighborResolver::Resolve(Data.Type, FTileNeighborResolver::ComputeSameTypeMask(InGrid, Tile));
 			Key.bWatered = Data.HasFlag(ETileFlags::Watered);
-			TilesByKey.FindOrAdd(Key).Add({ Tile, Key.Rotation });
+
+			TMap<FTileVisualKey, TArray<FPlacedTile>>* Group = &TilesByKey;
+			if (Data.IsSlope())
+			{
+				FIntPoint MeshFacing;
+				const ETileSlopeShape Shape = TileData::GetSlopeShape(Data.Slope);
+				for (int32 PieceIndex = 0; PieceIndex < NumPieceShapes; ++PieceIndex)
+				{
+					if (PieceShapes[PieceIndex] == Shape && TilesVisualSet->GetSlopeMesh(Shape, MeshFacing)) Group = &SlopePiecesByKey[PieceIndex];
+				}
+
+				// An inner corner without its own piece: two edge pieces rising to its two raised edges.
+				// Together they are solid and close the corner's sides, so no gap opens under it.
+				if (Group == &TilesByKey && Shape == ETileSlopeShape::InnerCorner && TilesVisualSet->GetSlopeMesh(ETileSlopeShape::Edge, MeshFacing))
+				{
+					const FIntPoint LowCorner = TileData::GetSlopeFacing(Data.Slope);
+					TArray<FPlacedTile>& Edges = SlopePiecesByKey[0].FindOrAdd(Key);
+					Edges.Add({ Tile, Key.Rotation, TileData::MakeEdgeSlope(FIntPoint(-LowCorner.X, 0)) });
+					Edges.Add({ Tile, Key.Rotation, TileData::MakeEdgeSlope(FIntPoint(0, -LowCorner.Y)) });
+					continue;
+				}
+			}
+			Group->FindOrAdd(Key).Add({ Tile, Key.Rotation, Data.Slope });
 		}
 	}
 
@@ -147,8 +179,19 @@ void ATileVisualGrid::BuildChunk(const FTileGrid& InGrid, const FIntPoint& InChu
 		Transforms.Reserve(Tiles.Num());
 		for (const FPlacedTile& Placed : Tiles)
 		{
+			const uint8 Level = InGrid.GetTile(Placed.Tile).Height;
+
+			// A slope without a piece: tilt the tile for an edge, otherwise draw it flat, an inner
+			// corner (mostly high) on the level above.
+			const ETileSlopeShape Shape = TileData::GetSlopeShape(Placed.Slope);
+			if (Shape == ETileSlopeShape::Edge)
+			{
+				Transforms.Add(TileCliffs::MakeTiltedTileTransform(Layout, Placed.Tile, Level, TileData::GetSlopeFacing(Placed.Slope), MeshBounds));
+				continue;
+			}
+
 			const FQuat Rotation(FRotator(0.f, static_cast<float>(Placed.Rotation), 0.f));
-			const FVector TileCenter = Layout.TileCenter(Placed.Tile, InGrid.GetTile(Placed.Tile).Height);
+			const FVector TileCenter = Layout.TileCenter(Placed.Tile, Shape == ETileSlopeShape::InnerCorner ? Level + 1 : Level);
 			Transforms.Emplace(Rotation, TileCenter - Rotation.RotateVector(MeshAnchor));
 		}
 
@@ -162,6 +205,37 @@ void ATileVisualGrid::BuildChunk(const FTileGrid& InGrid, const FIntPoint& InChu
 		Component->AddInstances(Transforms, /*bShouldReturnIndices*/ false, /*bWorldSpace*/ true);
 
 		Chunk.Meshes.Add(Key, Component);
+	}
+
+	// Slope pieces: the shape's mesh, painted like the tile type it belongs to.
+	const TCHAR* PieceNames[NumPieceShapes] = { TEXT("SlopeEdge"), TEXT("SlopeOuter"), TEXT("SlopeInner") };
+	for (int32 PieceIndex = 0; PieceIndex < NumPieceShapes; ++PieceIndex)
+	{
+		FIntPoint MeshFacing;
+		UStaticMesh* PieceMesh = TilesVisualSet->GetSlopeMesh(PieceShapes[PieceIndex], MeshFacing);
+		if (!PieceMesh) continue;
+		const FBox MeshBounds = PieceMesh->GetBoundingBox();
+
+		for (const auto& [Key, Tiles] : SlopePiecesByKey[PieceIndex])
+		{
+			const UTileTypeVisualData* const* TypeVisualsPtr = TilesVisualSet->TileTypeVisuals.Find(Key.TileType);
+			const FTileTypeVisualVariant* Variant = TypeVisualsPtr && *TypeVisualsPtr ? (*TypeVisualsPtr)->FindVisualVariantOrFallback(Key) : nullptr;
+
+			TArray<FTransform> Transforms;
+			Transforms.Reserve(Tiles.Num());
+			for (const FPlacedTile& Placed : Tiles)
+			{
+				Transforms.Add(TileCliffs::MakeSlopePieceTransform(Layout, Placed.Tile, InGrid.GetTile(Placed.Tile).Height,
+					TileData::GetSlopeFacing(Placed.Slope), MeshBounds, MeshFacing));
+			}
+
+			const FString BaseName = FString::Printf(TEXT("Chunk_X%d_Y%d_%s_%s%s"),
+				InChunk.X, InChunk.Y, *UEnum::GetValueAsString(Key.TileType), PieceNames[PieceIndex], Key.bWatered ? TEXT("_Watered") : TEXT(""));
+			UHierarchicalInstancedStaticMeshComponent* Component = CreateChunkComponent(BaseName, PieceMesh, Variant ? Variant->GetMaterial(Key.bWatered) : nullptr);
+			Component->AddInstances(Transforms, /*bShouldReturnIndices*/ false, /*bWorldSpace*/ true);
+
+			Chunk.Slopes.Add(Component);
+		}
 	}
 
 	BuildChunkCliffs(InGrid, InChunk, First, End);
@@ -232,6 +306,10 @@ void ATileVisualGrid::DestroyChunk(const FIntPoint& InChunk)
 		if (Component) Component->DestroyComponent();
 	}
 	if (Chunk->Cliffs) Chunk->Cliffs->DestroyComponent();
+	for (UHierarchicalInstancedStaticMeshComponent* Component : Chunk->Slopes)
+	{
+		if (Component) Component->DestroyComponent();
+	}
 	Chunks.Remove(InChunk);
 }
 
@@ -269,6 +347,10 @@ void ATileVisualGrid::FinalizeNavigation(const FBox& InDirtyArea)
 			if (Component) Component->BuildTreeIfOutdated(/*Async*/ false, /*ForceUpdate*/ false);
 		}
 		if (Chunk.Cliffs) Chunk.Cliffs->BuildTreeIfOutdated(/*Async*/ false, /*ForceUpdate*/ false);
+		for (UHierarchicalInstancedStaticMeshComponent* Component : Chunk.Slopes)
+		{
+			if (Component) Component->BuildTreeIfOutdated(/*Async*/ false, /*ForceUpdate*/ false);
+		}
 	}
 
 	if (auto* NavSys = FNavigationSystem::GetCurrent<UNavigationSystemV1>(GetWorld()))

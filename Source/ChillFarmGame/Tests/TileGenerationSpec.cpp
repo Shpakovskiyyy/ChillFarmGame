@@ -8,6 +8,8 @@
 #include "Generation/TileGenerationContext.h"
 #include "Generation/TileGenerationPass.h"
 #include "Generation/TileGenerationPasses.h"
+#include "TileReachability.h"
+#include "TileCliffs.h"
 
 using namespace TileTestUtils;
 
@@ -23,10 +25,12 @@ namespace TileGenerationSpecPrivate
 		UShorePass* Shores = nullptr;
 		UTileSmoothingPass* Smoothing = nullptr;
 		UFertilityPass* Fertility = nullptr;
+		USlopePass* Slopes = nullptr;
+		URampPass* Ramps = nullptr;
 
 		TArray<const UTileGenerationPass*> List() const
 		{
-			return { Terrain, Biomes, TileTypes, Terraces, Shores, Smoothing, Fertility };
+			return { Terrain, Biomes, TileTypes, Terraces, Shores, Smoothing, Fertility, Slopes, Ramps };
 		}
 	};
 
@@ -43,6 +47,8 @@ namespace TileGenerationSpecPrivate
 		Passes.Shores = NewObject<UShorePass>();
 		Passes.Smoothing = NewObject<UTileSmoothingPass>();
 		Passes.Fertility = NewObject<UFertilityPass>();
+		Passes.Slopes = NewObject<USlopePass>();
+		Passes.Ramps = NewObject<URampPass>();
 		return Passes;
 	}
 
@@ -158,7 +164,7 @@ void FTileGenerationSpec::Define()
 
 			// A pass that finds nothing to do makes no changes, so only the order is checked:
 			// steps must appear in pipeline order, each in one uninterrupted block.
-			const TArray<FName> Pipeline = { TEXT("Terrain"), TEXT("Biomes"), TEXT("Tile Types"), TEXT("Terraces"), TEXT("Shores"), TEXT("Smoothing"), TEXT("Fertility") };
+			const TArray<FName> Pipeline = { TEXT("Terrain"), TEXT("Biomes"), TEXT("Tile Types"), TEXT("Terraces"), TEXT("Shores"), TEXT("Smoothing"), TEXT("Fertility"), TEXT("Slopes"), TEXT("Ramps") };
 
 			int32 LastStepIndex = -1;
 			bool bInOrder = true;
@@ -586,6 +592,232 @@ void FTileGenerationSpec::Define()
 		});
 	});
 
+	Describe("USlopePass", [this]()
+	{
+		// A 3 x 3 terrace one level up in the middle of a 7 x 7 map.
+		const auto MakeTerrace = []()
+		{
+			FTileGrid Grid = MakeGrid({ TEXT("GGGGGGG"), TEXT("GGGGGGG"), TEXT("GGGGGGG"), TEXT("GGGGGGG"), TEXT("GGGGGGG"), TEXT("GGGGGGG"), TEXT("GGGGGGG") });
+			SetHeights(Grid, { TEXT("0000000"), TEXT("0000000"), TEXT("0011100"), TEXT("0011100"), TEXT("0011100"), TEXT("0000000"), TEXT("0000000") });
+			return Grid;
+		};
+		const auto RunSlopes = [](FTileGrid& Grid, float InAmount, int32 InSeed = 1)
+		{
+			FTileGenerationContext Context(Grid, InSeed);
+			USlopePass* Pass = NewObject<USlopePass>();
+			Pass->SlopeAmount = InAmount;
+			Pass->Execute(Context);
+		};
+
+		It("rings a terrace with edges and outer corners where every corner is soft", [this, MakeTerrace, RunSlopes]()
+		{
+			FTileGrid Grid = MakeTerrace();
+			RunSlopes(Grid, 1.f);
+
+			int32 Edges = 0;
+			int32 OuterCorners = 0;
+			for (const FTileData& Tile : Grid.GetTiles())
+			{
+				const ETileSlopeShape Shape = TileData::GetSlopeShape(Tile.Slope);
+				Edges += Shape == ETileSlopeShape::Edge ? 1 : 0;
+				OuterCorners += Shape == ETileSlopeShape::OuterCorner ? 1 : 0;
+			}
+			TestEq(*this, TEXT("Edges, three per side"), Edges, 12);
+			TestEq(*this, TEXT("Outer corners"), OuterCorners, 4);
+
+			TestEq(*this, TEXT("West side rises east"), TileData::GetSlopeFacing(Grid.GetTile(FIntPoint(1, 3)).Slope), FIntPoint(1, 0));
+			TestEq(*this, TEXT("North-west corner raised south-east"), TileData::GetSlopeFacing(Grid.GetTile(FIntPoint(1, 1)).Slope), FIntPoint(1, 1));
+			TestFalse(TEXT("The terrace stays flat"), Grid.GetTile(FIntPoint(3, 3)).IsSlope());
+			TestFalse(TEXT("Two tiles away stays flat"), Grid.GetTile(FIntPoint(0, 3)).IsSlope());
+
+			TArray<int32> Regions;
+			TestEq(*this, TEXT("Walkable areas"), TileReachability::ComputeWalkRegions(Grid, Regions), 1);
+
+			TArray<FTileCliffFace> Faces;
+			TileCliffs::CollectFaces(Grid, FIntPoint::ZeroValue, Grid.GetSize(), Faces);
+			TestEq(*this, TEXT("No cliffs left"), Faces.Num(), 0);
+		});
+
+		It("fills the inside of a corner with an inner corner", [this, RunSlopes]()
+		{
+			// An L-shaped terrace: the low tile (1, 1) has higher ground north, west and north-west.
+			FTileGrid Grid = MakeGrid({ TEXT("GGGG"), TEXT("GGGG"), TEXT("GGGG"), TEXT("GGGG") });
+			SetHeights(Grid, { TEXT("1111"), TEXT("1000"), TEXT("1000"), TEXT("1000") });
+			RunSlopes(Grid, 1.f);
+
+			const uint8 Slope = Grid.GetTile(FIntPoint(1, 1)).Slope;
+			TestEq(*this, TEXT("Shape"), TileData::GetSlopeShape(Slope), ETileSlopeShape::InnerCorner);
+			TestEq(*this, TEXT("Low corner"), TileData::GetSlopeFacing(Slope), FIntPoint(1, 1));
+		});
+
+		It("keeps every cliff where no corner is soft", [this, MakeTerrace, RunSlopes]()
+		{
+			FTileGrid Grid = MakeTerrace();
+			RunSlopes(Grid, 0.f);
+			for (const FTileData& Tile : Grid.GetTiles()) TestFalse(TEXT("No slope"), Tile.IsSlope());
+		});
+
+		It("leaves a one-tile valley flat", [this, RunSlopes]()
+		{
+			// The middle column has higher ground on both sides: it would need opposite edges raised.
+			FTileGrid Grid = MakeGrid({ TEXT("GGG"), TEXT("GGG"), TEXT("GGG") });
+			SetHeights(Grid, { TEXT("101"), TEXT("101"), TEXT("101") });
+			RunSlopes(Grid, 1.f);
+
+			for (int32 Y = 0; Y < 3; ++Y) TestFalse(TEXT("Valley"), Grid.GetTile(FIntPoint(1, Y)).IsSlope());
+		});
+
+		It("never slopes water or a tile something stands on", [this, RunSlopes]()
+		{
+			FTileGrid Grid = MakeGrid({ TEXT("GGG"), TEXT("WGG") });
+			SetHeights(Grid, { TEXT("111"), TEXT("000") });
+			Grid.ApplyMutation(FIntPoint(2, 1), FTileMutation().SetFlag(ETileFlags::Occupied, true));
+			RunSlopes(Grid, 1.f);
+
+			TestFalse(TEXT("Water"), Grid.GetTile(FIntPoint(0, 1)).IsSlope());
+			TestTrue(TEXT("Land"), Grid.GetTile(FIntPoint(1, 1)).IsSlope());
+			TestFalse(TEXT("Occupied"), Grid.GetTile(FIntPoint(2, 1)).IsSlope());
+		});
+
+		It("mixes slopes and cliffs from the seed", [this, RunSlopes]()
+		{
+			const auto SlopesFor = [RunSlopes](int32 InSeed)
+			{
+				// Two long terraces, so the noise has room to change along their edges.
+				FTileGrid Grid = MakeGrid({ TEXT("GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG"), TEXT("GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG"), TEXT("GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG"), TEXT("GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG") });
+				SetHeights(Grid, { TEXT("1111111111111111111111111111111111111111"), TEXT("0000000000000000000000000000000000000000"), TEXT("0000000000000000000000000000000000000000"), TEXT("1111111111111111111111111111111111111111") });
+				RunSlopes(Grid, 0.5f, InSeed);
+				return TArray<FTileData>(Grid.GetTiles());
+			};
+
+			const TArray<FTileData> Tiles = SlopesFor(4);
+			int32 Slopes = 0;
+			for (const FTileData& Tile : Tiles) Slopes += Tile.IsSlope() ? 1 : 0;
+			TestTrue(TEXT("Some slopes"), Slopes > 0);
+			TestTrue(TEXT("Some cliffs"), Slopes < 80);
+			TestTrue(TEXT("Same seed"), Tiles == SlopesFor(4));
+			TestFalse(TEXT("Another seed"), Tiles == SlopesFor(5));
+		});
+	});
+
+	Describe("URampPass", [this]()
+	{
+		It("joins a raised terrace to the land below with one ramp", [this]()
+		{
+			FTileGrid Grid = MakeGrid({ TEXT("GGGGGGG"), TEXT("GGGGGGG"), TEXT("GGGGGGG"), TEXT("GGGGGGG"), TEXT("GGGGGGG"), TEXT("GGGGGGG"), TEXT("GGGGGGG") });
+			SetHeights(Grid, { TEXT("0000000"), TEXT("0000000"), TEXT("0011100"), TEXT("0011100"), TEXT("0011100"), TEXT("0000000"), TEXT("0000000") });
+			FTileGenerationContext Context(Grid, 1);
+
+			NewObject<URampPass>()->Execute(Context);
+
+			int32 Ramps = 0;
+			for (int32 Index = 0; Index < Grid.GetLayout().NumTiles(); ++Index)
+			{
+				const FIntPoint Tile = Grid.GetLayout().ToTile(Index);
+				const FTileData& Data = Grid.GetTile(Tile);
+				if (!Data.IsSlope()) continue;
+				++Ramps;
+
+				// On the low ring, rising into the terrace, with flat ground behind it.
+				TestEq(*this, TEXT("Shape"), TileData::GetSlopeShape(Data.Slope), ETileSlopeShape::Edge);
+				const FIntPoint Offset = TileData::GetSlopeFacing(Data.Slope);
+				TestEq(*this, TEXT("Ramp level"), Data.Height, static_cast<uint8>(0));
+				TestEq(*this, TEXT("Top level"), Grid.GetTile(Tile + Offset).Height, static_cast<uint8>(1));
+				const FTileData* Back = Grid.FindTile(Tile - Offset);
+				TestTrue(TEXT("Flat ground behind"), Back && Back->Height == 0);
+			}
+			TestEq(*this, TEXT("Ramps"), Ramps, 1);
+
+			TArray<int32> Regions;
+			TestEq(*this, TEXT("Walkable areas"), TileReachability::ComputeWalkRegions(Grid, Regions), 1);
+		});
+
+		It("joins every terrace, including one on top of another", [this]()
+		{
+			// Rings two tiles wide, so a ramp onto each level has flat ground behind it.
+			FTileGrid Grid = MakeGrid({
+				TEXT("GGGGGGGGGGG"), TEXT("GGGGGGGGGGG"), TEXT("GGGGGGGGGGG"), TEXT("GGGGGGGGGGG"), TEXT("GGGGGGGGGGG"), TEXT("GGGGGGGGGGG"),
+				TEXT("GGGGGGGGGGG"), TEXT("GGGGGGGGGGG"), TEXT("GGGGGGGGGGG"), TEXT("GGGGGGGGGGG"), TEXT("GGGGGGGGGGG"),
+			});
+			SetHeights(Grid, {
+				TEXT("00000000000"),
+				TEXT("00000000000"),
+				TEXT("00111111100"),
+				TEXT("00111111100"),
+				TEXT("00112221100"),
+				TEXT("00112221100"),
+				TEXT("00112221100"),
+				TEXT("00111111100"),
+				TEXT("00111111100"),
+				TEXT("00000000000"),
+				TEXT("00000000000"),
+			});
+			FTileGenerationContext Context(Grid, 5);
+			NewObject<URampPass>()->Execute(Context);
+
+			TArray<int32> Regions;
+			TestEq(*this, TEXT("Walkable areas"), TileReachability::ComputeWalkRegions(Grid, Regions), 1);
+		});
+
+		It("joins the terraces of every island, not only the largest one", [this]()
+		{
+			// Left: a big flat island. Right, past the water: a small island with a terrace on it.
+			FTileGrid Grid = MakeGrid({
+				TEXT("GGGGGGGGWGGGGGG"),
+				TEXT("GGGGGGGGWGGGGGG"),
+				TEXT("GGGGGGGGWGGGGGG"),
+				TEXT("GGGGGGGGWGGGGGG"),
+				TEXT("GGGGGGGGWGGGGGG"),
+			});
+			SetHeights(Grid, {
+				TEXT("000000000000000"),
+				TEXT("000000000000000"),
+				TEXT("000000000001100"),
+				TEXT("000000000001100"),
+				TEXT("000000000000000"),
+			});
+			FTileGenerationContext Context(Grid, 1);
+			NewObject<URampPass>()->Execute(Context);
+
+			TArray<int32> Regions;
+			TestEq(*this, TEXT("Walkable areas: one per island"), TileReachability::ComputeWalkRegions(Grid, Regions), 2);
+		});
+
+		It("leaves land that only water separates apart", [this]()
+		{
+			FTileGrid Grid = MakeGrid({ TEXT("GGWGG") });
+			FTileGenerationContext Context(Grid, 1);
+			NewObject<URampPass>()->Execute(Context);
+
+			TestEq(*this, TEXT("Map"), DescribeTypes(Grid), FString(TEXT("GGWGG")));
+			for (const FTileData& Tile : Grid.GetTiles()) TestFalse(TEXT("No ramp"), Tile.IsSlope());
+		});
+
+		It("needs flat ground behind a ramp", [this]()
+		{
+			// The only low tile next to the terrace has the map edge behind it, so no ramp fits.
+			FTileGrid Grid = MakeGrid({ TEXT("GG") });
+			SetHeights(Grid, { TEXT("01") });
+			FTileGenerationContext Context(Grid, 1);
+			NewObject<URampPass>()->Execute(Context);
+
+			TestFalse(TEXT("No ramp on (0, 0)"), Grid.GetTile(FIntPoint(0, 0)).IsSlope());
+		});
+
+		It("places the same ramps for the same seed", [this]()
+		{
+			const auto RampsFor = [](int32 InSeed)
+			{
+				FTileGrid Grid = MakeGrid({ TEXT("GGGGGGG"), TEXT("GGGGGGG"), TEXT("GGGGGGG"), TEXT("GGGGGGG"), TEXT("GGGGGGG"), TEXT("GGGGGGG"), TEXT("GGGGGGG") });
+				SetHeights(Grid, { TEXT("0000000"), TEXT("0000000"), TEXT("0011100"), TEXT("0011100"), TEXT("0011100"), TEXT("0000000"), TEXT("0000000") });
+				FTileGenerationContext Context(Grid, InSeed);
+				NewObject<URampPass>()->Execute(Context);
+				return TArray<FTileData>(Grid.GetTiles());
+			};
+			TestTrue(TEXT("Same seed"), RampsFor(9) == RampsFor(9));
+		});
+	});
+
 	Describe("UFertilityPass", [this]()
 	{
 		It("needs a biome set for the soil table", [this]()
@@ -705,6 +937,45 @@ void FTileGenerationSpec::Define()
 			// Every tile used to get its biome's base value. Moisture must now make grass differ.
 			TestTrue(TEXT("Grass fertility varies"), GrassFertility.Num() > 1);
 			TestTrue(TEXT("Some water and some land"), WaterTiles > 0 && WaterTiles < Layout.NumTiles());
+		});
+
+		It("lets every piece of land be walked to unless water cuts it off", [this]()
+		{
+			for (const int32 Seed : { 3, 7, 11, 19, 42 })
+			{
+				const FTileGrid Grid = GenerateWorld(Seed, FIntPoint(96, 96), 4);
+				const FTileGridLayout& Layout = Grid.GetLayout();
+
+				TArray<int32> Regions;
+				TileReachability::ComputeWalkRegions(Grid, Regions);
+
+				// Land connected through land (any level) must be one walkable area. Islands are allowed.
+				int32 CutOffSteps = 0;
+				int32 Slopes = 0;
+				int32 InvalidSlopes = 0;
+				int32 Cliffs = 0;
+				for (int32 Index = 0; Index < Layout.NumTiles(); ++Index)
+				{
+					const FIntPoint Tile = Layout.ToTile(Index);
+					const FTileData& Data = Grid.GetTile(Tile);
+					Slopes += Data.IsSlope() ? 1 : 0;
+					InvalidSlopes += TileData::GetSlopeShape(Data.Slope) == ETileSlopeShape::Invalid ? 1 : 0;
+					if (Regions[Index] == INDEX_NONE) continue;
+
+					for (const FIntPoint& Offset : FTileGrid::GetCardinalOffsets())
+					{
+						const FIntPoint Next = Tile + Offset;
+						if (!Layout.Contains(Next)) continue;
+						const int32 NextRegion = Regions[Layout.ToIndex(Next)];
+						if (NextRegion != INDEX_NONE && NextRegion != Regions[Index]) ++CutOffSteps;
+						if (NextRegion != INDEX_NONE && !TileReachability::CanStep(Data, Grid.GetTile(Next), Offset)) ++Cliffs;
+					}
+				}
+				TestEq(*this, FString::Printf(TEXT("Seed %d: land next to land it cannot be walked to"), Seed), CutOffSteps, 0);
+				TestEq(*this, FString::Printf(TEXT("Seed %d: slopes with opposite or all corners raised"), Seed), InvalidSlopes, 0);
+				TestTrue(FString::Printf(TEXT("Seed %d: has slopes"), Seed), Slopes > 0);
+				TestTrue(FString::Printf(TEXT("Seed %d: some cliffs stay"), Seed), Cliffs > 0);
+			}
 		});
 
 		It("records a history that rebuilds the final world exactly", [this]()

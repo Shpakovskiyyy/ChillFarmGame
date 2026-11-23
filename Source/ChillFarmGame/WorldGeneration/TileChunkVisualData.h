@@ -18,4 +18,9 @@ struct FTileChunkVisualData
 	// The sides between elevation levels, see TileCliffs.
 	UPROPERTY()
 	UHierarchicalInstancedStaticMeshComponent* Cliffs = nullptr;
+
+	// Slope pieces, one component per piece shape and tile type (and watered state), for the shapes
+	// the visual set has a mesh for.
+	UPROPERTY()
+	TArray<UHierarchicalInstancedStaticMeshComponent*> Slopes;
 };

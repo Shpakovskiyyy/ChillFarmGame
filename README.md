@@ -15,12 +15,12 @@ All active development is happening on the `TerrainGenerationMVP` branch. This b
 ## What Exists So Far
 
 ### Procedural World Generation
-`ATileWorldGenerator` builds the tile map from a seed by running a list of generation passes in order: terrain noise (height, moisture, water, elevation levels), biomes, tile types, terraces, shores, smoothing and fertility. Passes work on a plain `FTileGrid` without touching the world, so the same seed always gives the same map and the pipeline can be tested without a level.
+`ATileWorldGenerator` builds the tile map from a seed by running a list of generation passes in order: terrain noise (height, moisture, water, elevation levels), biomes, tile types, terraces, shores, smoothing, fertility, slopes and ramps. Passes work on a plain `FTileGrid` without touching the world, so the same seed always gives the same map and the pipeline can be tested without a level.
 
-The map is drawn by `ATileVisualGrid` with Hierarchical Instanced Static Mesh components, one per autotile piece per chunk. Raised terraces get cliff sides, stretched from any mesh set on the visual data. The drawn map is not saved with the level; it is regenerated from the seed when the level opens.
+The map is drawn by `ATileVisualGrid` with Hierarchical Instanced Static Mesh components, one per autotile piece per chunk. Where land meets higher land, a Slopes pass turns some of the edges into slopes (decided by a noise field, so some hills are soft and some have walls); the rest get cliff sides, stretched from any mesh set on the visual data. A Ramps pass then joins every terrace still cut off to the rest of its island, so all land can be walked to. The drawn map is not saved with the level; it is regenerated from the seed when the level opens.
 
 ### Tile System
-Each tile is six bytes of values: type, biome, elevation level, fertility, moisture and flags. `UTileWorldSubsystem` owns the live map and is the only way to change it at runtime (`MutateTile`); visuals and tools react to the changes it broadcasts.
+Each tile is seven bytes of values: type, biome, elevation level, slope (which corners are one level up), fertility, moisture and flags. `UTileWorldSubsystem` owns the live map and is the only way to change it at runtime (`MutateTile`); visuals and tools react to the changes it broadcasts.
 
 ### Tilling and Watering
 Right-click a tile within reach of the character: grass and dirt become farmland, farmland gets watered. The rules are pure functions (`TileFarming`), and every change goes through `MutateTile` as a gameplay change.
@@ -65,5 +65,5 @@ ChillFarmGame/
 - Harvest and inventory
 - Store and economy loop
 - Save/load
-- Ramps between elevation levels, rivers and roads (cliffs have a first version)
+- Rivers and roads (cliffs, slopes and ramps have a first version; slope corner meshes are still missing)
 - Farm site selection based on generated factors

@@ -1,6 +1,7 @@
-#pragma once
+﻿#pragma once
 
 #include "CoreMinimal.h"
+#include "TileData.h"
 
 class FTileGrid;
 struct FTileGridLayout;
@@ -28,8 +29,13 @@ struct FTileCliffFace
 // built, so cliffs can never disagree with the data.
 //
 // A cliff belongs to the higher tile and is drawn just inside its edge, so a tile's cliffs are
-// rebuilt together with the tile. Tiles on the map edge get a side down to level 0, so a raised
-// map does not show its underside.
+// rebuilt together with the tile. On every edge the side reaches from the lower of the tile's two
+// corners down to the lower of the neighbour's two corners (see FTileData::Slope), so:
+// - flat ground a level apart gets a full side, and where a slope rises to higher ground there is none;
+// - where a slope runs out into a cliff, the higher ground's side reaches down to the slope's low
+//   corner and its lower part is hidden inside the slope; a slope above lower flat ground draws no
+//   side, because slope pieces are solid and close their own sides.
+// Tiles on the map edge get a side down to level 0, so a raised map does not show its underside.
 namespace TileCliffs
 {
 	// Every cliff face of the generated tiles in [InFirst, InEnd).
@@ -39,4 +45,18 @@ namespace TileCliffs
 	// mesh's X becomes the width along the edge, Y the thickness (InThickness world units, inside
 	// the high tile), Z the height of the drop. Works for any mesh pivot.
 	CHILLFARMGAME_API FTransform MakeWallTransform(const FTileGridLayout& InLayout, const FTileCliffFace& InFace, const FBox& InMeshBounds, double InThickness);
+
+	// Instance transform that lays a flat tile mesh on an edge slope: tilted so its top face rises
+	// from the tile's level to the next one towards InRisesTowards (a cardinal offset), stretched along
+	// the slope to cover the tile. Used when the visual set has no slope mesh; the sides stay open.
+	CHILLFARMGAME_API FTransform MakeTiltedTileTransform(const FTileGridLayout& InLayout, const FIntPoint& InTile, uint8 InLevel, const FIntPoint& InRisesTowards, const FBox& InMeshBounds);
+
+	// Yaw in degrees of a grid offset (see TileData::GetSlopeFacing), the angle UE turns X onto it by.
+	CHILLFARMGAME_API double GetFacingYaw(const FIntPoint& InFacing);
+
+	// Instance transform that fits a slope mesh (edge, outer or inner corner) into the tile's box:
+	// one tile wide and long, from the tile's level to the next one. InMeshFacing is the way the mesh
+	// faces in its own space and InFacing the way the slope faces, both as TileData::GetSlopeFacing
+	// gives them; the mesh is turned from one to the other. Works for any mesh pivot.
+	CHILLFARMGAME_API FTransform MakeSlopePieceTransform(const FTileGridLayout& InLayout, const FIntPoint& InTile, uint8 InLevel, const FIntPoint& InFacing, const FBox& InMeshBounds, const FIntPoint& InMeshFacing);
 }

@@ -30,6 +30,55 @@ void FTileDataSpec::Define()
 			TestEq(*this, TEXT("Fertility"), Tile.Fertility, static_cast<uint8>(0));
 			TestEq(*this, TEXT("Moisture"), Tile.Moisture, static_cast<uint8>(0));
 			TestFalse(TEXT("No flags"), Tile.HasFlag(ETileFlags::Occupied));
+			TestFalse(TEXT("Not a slope"), Tile.IsSlope());
+		});
+
+		It("tells slope shapes apart by their raised corners", [this]()
+		{
+			TestEq(*this, TEXT("Flat"), TileData::GetSlopeShape(0), ETileSlopeShape::Flat);
+			TestEq(*this, TEXT("One corner"), TileData::GetSlopeShape(Corners(ETileCorner::SouthEast)), ETileSlopeShape::OuterCorner);
+			TestEq(*this, TEXT("North edge"), TileData::GetSlopeShape(Corners(ETileCorner::NorthWest | ETileCorner::NorthEast)), ETileSlopeShape::Edge);
+			TestEq(*this, TEXT("West edge"), TileData::GetSlopeShape(Corners(ETileCorner::NorthWest | ETileCorner::SouthWest)), ETileSlopeShape::Edge);
+			TestEq(*this, TEXT("Three corners"), TileData::GetSlopeShape(Corners(ETileCorner::NorthWest | ETileCorner::NorthEast | ETileCorner::SouthEast)), ETileSlopeShape::InnerCorner);
+			TestEq(*this, TEXT("Opposite corners"), TileData::GetSlopeShape(Corners(ETileCorner::NorthWest | ETileCorner::SouthEast)), ETileSlopeShape::Invalid);
+			TestEq(*this, TEXT("All corners"), TileData::GetSlopeShape(0xF), ETileSlopeShape::Invalid);
+		});
+
+		It("faces a slope towards its raised edge, its raised corner or its one low corner", [this]()
+		{
+			for (const FIntPoint& Offset : FTileGrid::GetCardinalOffsets())
+			{
+				TestEq(*this, TEXT("Edge"), TileData::GetSlopeFacing(TileData::MakeEdgeSlope(Offset)), Offset);
+			}
+			TestEq(*this, TEXT("North is -Y"), TileData::GetDirectionOffset(ETileDirection::North), FIntPoint(0, -1));
+			TestEq(*this, TEXT("Outer corner"), TileData::GetSlopeFacing(Corners(ETileCorner::NorthEast)), FIntPoint(1, -1));
+			TestEq(*this, TEXT("Inner corner"), TileData::GetSlopeFacing(Corners(ETileCorner::NorthWest | ETileCorner::NorthEast | ETileCorner::SouthEast)), FIntPoint(-1, 1));
+			TestEq(*this, TEXT("Flat"), TileData::GetSlopeFacing(0), FIntPoint::ZeroValue);
+		});
+
+		It("lists the corners of an edge in the same order from both sides", [this]()
+		{
+			for (const FIntPoint& Offset : FTileGrid::GetCardinalOffsets())
+			{
+				ETileCorner First, Second, OtherFirst, OtherSecond;
+				TileData::GetEdgeCorners(Offset, First, Second);
+				TileData::GetEdgeCorners(FIntPoint::ZeroValue - Offset, OtherFirst, OtherSecond);
+
+				// The same point seen from the neighbour: the corner offsets (in half tiles) differ by two half tiles.
+				const FIntPoint Step(Offset.X * 2, Offset.Y * 2);
+				TestEq(*this, TEXT("First corner"), TileData::GetCornerOffset(First), TileData::GetCornerOffset(OtherFirst) + Step);
+				TestEq(*this, TEXT("Second corner"), TileData::GetCornerOffset(Second), TileData::GetCornerOffset(OtherSecond) + Step);
+			}
+		});
+
+		It("puts raised corners one level up", [this]()
+		{
+			FTileData Tile;
+			Tile.Height = 2;
+			Tile.Slope = Corners(ETileCorner::NorthEast);
+			TestEq(*this, TEXT("Raised"), TileData::GetCornerLevel(Tile, ETileCorner::NorthEast), 3);
+			TestEq(*this, TEXT("Low"), TileData::GetCornerLevel(Tile, ETileCorner::SouthWest), 2);
+			TestEq(*this, TEXT("Top"), TileData::GetTopLevel(Tile), 3);
 		});
 
 		It("reports exactly the fields that differ", [this]()
@@ -39,6 +88,7 @@ void FTileDataSpec::Define()
 				{ ETileField::Type,      FTileMutation().SetType(ETileType::Rock) },
 				{ ETileField::Biome,     FTileMutation().SetBiome(EBiomeType::Desert) },
 				{ ETileField::Height,    FTileMutation().SetHeight(2) },
+				{ ETileField::Slope,     FTileMutation().SetSlope(TileData::MakeEdgeSlope(FIntPoint(1, 0))) },
 				{ ETileField::Fertility, FTileMutation().SetFertility(10) },
 				{ ETileField::Moisture,  FTileMutation().SetMoisture(20) },
 				{ ETileField::Flags,     FTileMutation().SetFlag(ETileFlags::Occupied, true) },
@@ -63,6 +113,7 @@ void FTileDataSpec::Define()
 			TestEq(*this, TEXT("Fertility"), FString(TileData::GetFieldName(ETileField::Fertility)), FString(TEXT("Fertility")));
 			TestEq(*this, TEXT("Moisture"), FString(TileData::GetFieldName(ETileField::Moisture)), FString(TEXT("Moisture")));
 			TestEq(*this, TEXT("Flags"), FString(TileData::GetFieldName(ETileField::Flags)), FString(TEXT("Flags")));
+			TestEq(*this, TEXT("Slope"), FString(TileData::GetFieldName(ETileField::Slope)), FString(TEXT("Slope")));
 			TestEq(*this, TEXT("A combination is not a single field"), FString(TileData::GetFieldName(ETileField::Type | ETileField::Height)), FString(TEXT("None")));
 		});
 
