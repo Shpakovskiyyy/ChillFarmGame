@@ -74,6 +74,7 @@ public:
 		{ ETileType::Sand,  0.3f },
 		{ ETileType::Rock,  0.0f },
 		{ ETileType::Water, 0.0f },
+		{ ETileType::Farmland, 1.0f },
 	};
 
 };

@@ -30,7 +30,7 @@ namespace TileInspector
 		Height,
 		Fertility,
 		Moisture,
-		Occupied,
+		Flags,
 		Changes,
 		Count
 	};
@@ -51,7 +51,12 @@ namespace TileInspector
 			case ETileField::Moisture:
 				return FText::Format(LOCTEXT("Percent", "{0}%"), FText::AsNumber(InField == ETileField::Fertility ? InTile.Fertility : InTile.Moisture));
 			case ETileField::Flags:
-				return InTile.HasFlag(ETileFlags::Occupied) ? LOCTEXT("Occupied", "Occupied") : LOCTEXT("Free", "Free");
+			{
+				TArray<FText> Names;
+				if (InTile.HasFlag(ETileFlags::Occupied)) Names.Add(LOCTEXT("Occupied", "Occupied"));
+				if (InTile.HasFlag(ETileFlags::Watered)) Names.Add(LOCTEXT("Watered", "Watered"));
+				return Names.IsEmpty() ? LOCTEXT("NoFlags", "None") : FText::Join(LOCTEXT("FlagSeparator", ", "), Names);
+			}
 			default:
 				return FText::GetEmpty();
 		}
@@ -138,7 +143,7 @@ TSharedRef<SWidget> STileInspectorWindow::BuildOverviewSection()
 		{ TileInspector::Height,      LOCTEXT("HeightLabel", "Height level") },
 		{ TileInspector::Fertility,   LOCTEXT("FertilityLabel", "Fertility") },
 		{ TileInspector::Moisture,    LOCTEXT("MoistureLabel", "Moisture") },
-		{ TileInspector::Occupied,    LOCTEXT("OccupiedLabel", "Occupied") },
+		{ TileInspector::Flags,       LOCTEXT("FlagsLabel", "Flags") },
 		{ TileInspector::Changes,     LOCTEXT("ChangesLabel", "Recorded changes") },
 	};
 
@@ -266,7 +271,7 @@ void STileInspectorWindow::Refresh()
 		OverviewValues[TileInspector::Height] = TileInspector::FormatField(ETileField::Height, *Tile);
 		OverviewValues[TileInspector::Fertility] = TileInspector::FormatField(ETileField::Fertility, *Tile);
 		OverviewValues[TileInspector::Moisture] = TileInspector::FormatField(ETileField::Moisture, *Tile);
-		OverviewValues[TileInspector::Occupied] = TileInspector::FormatField(ETileField::Flags, *Tile);
+		OverviewValues[TileInspector::Flags] = TileInspector::FormatField(ETileField::Flags, *Tile);
 	}
 	else if (SelectedTile != FIntPoint::NoneValue)
 	{

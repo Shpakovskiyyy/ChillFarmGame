@@ -116,7 +116,8 @@ void ATileVisualGrid::BuildChunk(const FTileGrid& InGrid, const FIntPoint& InChu
 			const FTileData& Data = InGrid.GetTile(Tile);
 			if (!Data.IsGenerated()) continue;
 
-			const FTileVisualKey Key = FTileNeighborResolver::Resolve(Data.Type, FTileNeighborResolver::ComputeSameTypeMask(InGrid, Tile));
+			FTileVisualKey Key = FTileNeighborResolver::Resolve(Data.Type, FTileNeighborResolver::ComputeSameTypeMask(InGrid, Tile));
+			Key.bWatered = Data.HasFlag(ETileFlags::Watered);
 			TilesByKey.FindOrAdd(Key).Add({ Tile, Key.Rotation });
 		}
 	}
@@ -150,10 +151,11 @@ void ATileVisualGrid::BuildChunk(const FTileGrid& InGrid, const FIntPoint& InChu
 			Transforms.Emplace(Rotation, TileCenter - Rotation.RotateVector(MeshAnchor));
 		}
 
-		const FString BaseName = FString::Printf(TEXT("Chunk_X%d_Y%d_%s_%s"),
+		const FString BaseName = FString::Printf(TEXT("Chunk_X%d_Y%d_%s_%s%s"),
 			InChunk.X, InChunk.Y,
 			*UEnum::GetValueAsString(Key.TileType),
-			*UEnum::GetValueAsString(Key.VisualPositionType));
+			*UEnum::GetValueAsString(Key.VisualPositionType),
+			Key.bWatered ? TEXT("_Watered") : TEXT(""));
 
 		// A destroyed component keeps its name until garbage collection, so ask for a unique one.
 		const FName UniqueName = MakeUniqueObjectName(this, UHierarchicalInstancedStaticMeshComponent::StaticClass(), FName(*BaseName));
@@ -164,7 +166,7 @@ void ATileVisualGrid::BuildChunk(const FTileGrid& InGrid, const FIntPoint& InChu
 		Component->SetCollisionProfileName(TEXT("BlockAll"), true);
 		Component->SetCanEverAffectNavigation(true);
 		Component->SetStaticMesh(Variant->Mesh);
-		if (Variant->Material) Component->SetMaterial(0, Variant->Material);
+		if (UMaterialInterface* Material = Variant->GetMaterial(Key.bWatered)) Component->SetMaterial(0, Material);
 
 		// Instance transforms are in world space: the tile layout, not this actor, decides where tiles are.
 		Component->SetUsingAbsoluteLocation(true);

@@ -14,6 +14,10 @@ enum class ETileFlags : uint8
 
 	// Something stands on the tile (a building, a rock, a tree) and nothing else can be placed there.
 	Occupied	= 1 << 0,
+
+	// Watered by the player today. Daily state, cleared overnight by the day cycle; separate from the
+	// natural ground Moisture that generation stores.
+	Watered		= 1 << 1,
 };
 ENUM_CLASS_FLAGS(ETileFlags)
 

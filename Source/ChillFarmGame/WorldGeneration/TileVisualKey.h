@@ -45,17 +45,21 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta=(ClampMin="0"))
 	int32 Rotation = 0;
 
+	// The tile has ETileFlags::Watered. Same mesh and autotile piece, drawn with the variant's watered material.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	bool bWatered = false;
+
 };
 
 FORCEINLINE bool FTileVisualKey::operator==(const FTileVisualKey& Other) const
 {
-	return TileType == Other.TileType && VisualPositionType == Other.VisualPositionType;
+	return TileType == Other.TileType && VisualPositionType == Other.VisualPositionType && bWatered == Other.bWatered;
 }
 
 FORCEINLINE uint32 GetTypeHash(const FTileVisualKey& Key)
 {
 	return HashCombine(
-		GetTypeHash(Key.TileType),
-		GetTypeHash(Key.VisualPositionType)
+		HashCombine(GetTypeHash(Key.TileType), GetTypeHash(Key.VisualPositionType)),
+		GetTypeHash(Key.bWatered)
 	);
 }

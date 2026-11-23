@@ -70,7 +70,7 @@ namespace TileTestUtils
 		return Layout;
 	}
 
-	// G grass, D dirt, S sand, R rock, W water, '.' not generated.
+	// G grass, D dirt, S sand, R rock, W water, F farmland, '.' not generated.
 	inline ETileType CharToType(TCHAR InChar)
 	{
 		switch (InChar)
@@ -80,6 +80,7 @@ namespace TileTestUtils
 			case 'S': return ETileType::Sand;
 			case 'R': return ETileType::Rock;
 			case 'W': return ETileType::Water;
+			case 'F': return ETileType::Farmland;
 			default:  return ETileType::ETileType_MAX;
 		}
 	}
@@ -93,6 +94,7 @@ namespace TileTestUtils
 			case ETileType::Sand:  return 'S';
 			case ETileType::Rock:  return 'R';
 			case ETileType::Water: return 'W';
+			case ETileType::Farmland: return 'F';
 			default:               return '.';
 		}
 	}

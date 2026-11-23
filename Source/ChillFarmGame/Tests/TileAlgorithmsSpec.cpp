@@ -8,6 +8,9 @@
 #include "TileAlgorithms.h"
 #include "TileNeighborResolver.h"
 #include "TileVisualKey.h"
+#include "TileTypeVisualVariant.h"
+#include "Materials/Material.h"
+#include "Materials/MaterialInstanceConstant.h"
 
 using namespace TileTestUtils;
 
@@ -281,6 +284,34 @@ void FTileAlgorithmsSpec::Define()
 		{
 			const FTileGrid Grid = MakeGrid({ TEXT("GG"), TEXT("GG") });
 			TestEq(*this, TEXT("Outside"), FTileNeighborResolver::ComputeSameTypeMask(Grid, FIntPoint(5, 5)), static_cast<uint8>(0));
+		});
+	});
+
+	Describe("Watered visuals", [this]()
+	{
+		It("draws watered tiles with the watered material, or the dry one when there is none", [this]()
+		{
+			UMaterialInterface* Dry = UMaterial::GetDefaultMaterial(MD_Surface);
+			UMaterialInterface* Wet = NewObject<UMaterialInstanceConstant>();
+
+			FTileTypeVisualVariant Variant;
+			Variant.Material = Dry;
+			TestTrue(TEXT("No watered material, watered tile"), Variant.GetMaterial(true) == Dry);
+
+			Variant.WateredMaterial = Wet;
+			TestTrue(TEXT("Dry tile"), Variant.GetMaterial(false) == Dry);
+			TestTrue(TEXT("Watered tile"), Variant.GetMaterial(true) == Wet);
+		});
+
+		It("keeps watered and dry tiles of the same piece in separate groups", [this]()
+		{
+			FTileVisualKey Dry = FTileNeighborResolver::Resolve(ETileType::Farmland, 0);
+			FTileVisualKey Wet = Dry;
+			Wet.bWatered = true;
+			TestFalse(TEXT("Equal"), Dry == Wet);
+
+			TSet<FTileVisualKey> Keys = { Dry, Wet };
+			TestEq(*this, TEXT("Groups"), Keys.Num(), 2);
 		});
 	});
 }

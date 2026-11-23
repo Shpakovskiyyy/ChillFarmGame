@@ -24,5 +24,13 @@ struct FTileTypeVisualVariant
 
 	UPROPERTY(EditAnywhere)
 	UMaterialInterface* Material = nullptr;
-	
+
+	// Used instead of Material while the tile is watered. Empty means watered tiles look like dry ones.
+	UPROPERTY(EditAnywhere)
+	UMaterialInterface* WateredMaterial = nullptr;
+
+	UMaterialInterface* GetMaterial(bool bWatered) const
+	{
+		return bWatered && WateredMaterial ? WateredMaterial : Material;
+	}
 };
