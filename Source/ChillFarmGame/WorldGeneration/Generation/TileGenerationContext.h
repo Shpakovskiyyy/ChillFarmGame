@@ -33,6 +33,10 @@ struct FTileGenerationContext
 	TArray<float> MoistureField;
 	TArray<float> DetailField;
 
+	// Height noise at and below which a tile is water, set by the terrain pass. Elevation is measured
+	// from here.
+	float WaterLevel = 0.f;
+
 	// Assets shared by several passes.
 	const UBiomeTypeDataSet* Biomes = nullptr;
 	UTilesGenerationRuleSet* DefaultRuleSet = nullptr;

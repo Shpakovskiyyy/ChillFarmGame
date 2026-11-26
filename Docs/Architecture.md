@@ -34,7 +34,7 @@ flowchart TB
 
     subgraph Gen["Generation (no world access)"]
         GC[FTileGenerationContext]
-        P1[Terrain] --> P2[Biomes] --> P3[Tile Types] --> P4[Terraces] --> P5[Shores] --> P6[Smoothing] --> P7[Fertility] --> P8[Slopes] --> P9[Ramps]
+        P1[Terrain] --> P2[Biomes] --> P2b[Elevation] --> P3[Tile Types] --> P4[Terraces] --> P5[Shores] --> P6[Smoothing] --> P7[Fertility] --> P8[Slopes] --> P9[Ramps]
     end
 
     subgraph Runtime["World (runtime)"]
@@ -84,8 +84,9 @@ One per world (editor, PIE, game). Owns the live grid.
 
 | Pass | Reads | Writes |
 |---|---|---|
-| Terrain | seed | height/moisture/detail noise fields; water tiles; height levels |
+| Terrain | seed | height/moisture/detail noise fields; water tiles; the water level for later passes |
 | Biomes | noise fields, biome set | biome, moisture |
+| Elevation | height and moisture noise, water level, biome set | height levels, scaled and capped per biome (see D16) |
 | Tile Types | biome rule sets | tile type |
 | Terraces | height levels | height levels (no neighbours more than one level apart) |
 | Shores | tile types, biome set | shore tile type next to water |
@@ -207,7 +208,7 @@ Each entry: what it was, what it is now, why, and what it costs.
 ### D8. Elevation levels and the Terraces pass
 
 - **Before:** no elevation.
-- **After:** `Height` level per tile from the height noise (`MaxLevel`, default 0, so the world stays flat until you enable it), and a pass that cuts slopes so direct neighbours differ by at most one level. The algorithm is a two-sweep clamp, O(tiles), checked against brute force on 300 random grids.
+- **After:** `Height` level per tile from the height noise (`MaxLevel`; since D16 the Elevation pass assigns it per biome, default cap 4), and a pass that cuts slopes so direct neighbours differ by at most one level. The algorithm is a two-sweep clamp, O(tiles), checked against brute force on 300 random grids.
 - **Why:** Stardew-style terrain is discrete terraces with cliffs, not smooth hills; farm tiles must be flat.
 - **Cost:** with `MaxLevel > 0` tiles are drawn at their height; the sides are drawn by D12. The PlayerStart is placed by hand, so the game mode stands the pawn in the middle of the tile under it, on that tile's level.
 
@@ -260,6 +261,14 @@ Each entry: what it was, what it is now, why, and what it costs.
 - **Cost:** a post-process cannot tell materials apart, so every surface gets the same bands. The scene-colour ratio alone was unreliable (specular made rock fall into shadow before grass), which is why the bands come from the surface direction. Next step: a toon surface material, if per-material control is needed. Only GenerationTest has the volume and the atmosphere set-up so far.
 - **Palette:** the tile materials were pure primaries (fully saturated green and orange). They now share a warm, dusty palette, in sRGB: grass 128,168,84; dirt 168,106,66; sand 228,200,146; rock 156,146,132; water 72,158,168; farmland 122,80,54 (watered 86,58,44). Cliff walls have their own `MI_Cliff` (150,118,92) instead of reusing rock. The `Param` vector on each `MI_*` is linear, so convert from sRGB when changing it.
 - **Atmosphere (GenerationTest):** a warm sun (colour 255,238,214, 8 lux, pitch -42, drives the sky atmosphere), a real-time sky light, and height fog in the haze colour (sRGB 222,216,200; density 0.02, height falloff 0.4, max opacity 0.7) with a warm glow towards the sun. The falloff keeps the fog near the ground, so the sky stays blue above a hazy horizon. A dim sun (3 lux, as before) made the sky render overcast grey.
+
+### D16. Elevation is assigned per biome, after the biomes
+
+- **Before:** the Terrain pass cut the height noise into levels with one global `MaxLevel` (default 0, so new maps were flat) and `LevelStep`, before biomes existed. Plains and mountains got the same elevation.
+- **After:** a new Elevation pass runs right after Biomes. The height above water is multiplied by the biome's `ElevationScale`, cut into levels of `LevelStep`, and capped by the biome's `MaxLevel` and the pass's `MaxLevel` (default 4). Between two biomes the scale and the cap are blended with the same weights that choose between the biomes, so elevation changes gradually instead of jumping where the dithered border runs; the Terraces pass then limits steps to one level. Without a biome set the scale is 1. Test values: plains 0.5 / 1, forest 0.8 / 2, desert 1.0 / 2, mountains 1.4 / 4.
+- Placed generators keep their own copy of the pass list, so a pass added to the default pipeline later was silently missing from saved levels (this is why GenerationTest stayed flat). `ATileWorldGenerator::PostLoad` now adds every missing default pass in its pipeline position and logs it. Passes are switched off with their Enabled flag, so adding a missing one never undoes a choice.
+- **Why:** a farm game wants flat land to farm next to hills worth looking at. Elevation belongs to the biome like fertility does, and the setting lives on the biome asset where the rest of the biome is tuned.
+- **Cost:** the Elevation pass reads the biome blend again instead of storing it; cheap at this map size. The global `MaxLevel` moved from Terrain to Elevation, so a value saved on a level's Terrain pass is dropped. Next: the terrain numbers report (flat share, farm room, terrace width) to tune the biome values against.
 ---
 
 ## 5. What I deliberately did not change
@@ -287,7 +296,7 @@ When you open the project after these commits:
 Nothing below was possible without an Unreal toolchain.
 
 1. Build `ChillFarmGameEditor` (Development Editor). Fix anything the compiler finds; the most likely spots are engine API signatures in `TileVisualGrid.cpp`, `ViewportMouseClickNotifier.cpp` and `STileInspectorWindow.cpp`.
-2. Session Frontend → Automation → run `ChillFarmGame.TileWorld` (143 specs, see section 2.6).
+2. Session Frontend → Automation → run `ChillFarmGame.TileWorld` (147 specs, see section 2.6).
 3. Open the test map: the world appears without pressing Generate.
 4. Click a tile: yellow box on that tile, inspector shows type/biome/fertility/moisture and readable history.
 5. Click inside the Tile Inspector tab while it overlaps the viewport: nothing gets selected.

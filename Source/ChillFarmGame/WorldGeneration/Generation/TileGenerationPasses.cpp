@@ -53,6 +53,7 @@ void UTerrainNoisePass::Execute(FTileGenerationContext& Context) const
 	const FVector2D WarpOffset = RandomOffset();
 	const FVector2D MoistureOffset = RandomOffset();
 	const FVector2D DetailOffset = RandomOffset();
+	Context.WaterLevel = WaterLevel;
 
 	for (int32 Y = 0; Y < Layout.Size.Y; ++Y)
 	{
@@ -81,16 +82,41 @@ void UTerrainNoisePass::Execute(FTileGenerationContext& Context) const
 				Context.Mutate(Tile,
 					FTileMutation().SetType(ETileType::Water).SetBiome(EBiomeType::Water).SetMoisture(100).SetHeight(0),
 					TEXT("Below water level"));
-				continue;
 			}
-
-			int32 Level = 0;
-			if (MaxLevel > 0)
-			{
-				Level = FMath::Clamp(FMath::FloorToInt32((Height - WaterLevel) / LevelStep), 0, MaxLevel);
-			}
-			Context.Mutate(Tile, FTileMutation().SetHeight(static_cast<uint8>(Level)), TEXT("Elevation from height noise"));
 		}
+	}
+}
+
+
+/* Elevation */
+
+void UElevationPass::Execute(FTileGenerationContext& Context) const
+{
+	const FTileGridLayout& Layout = Context.GetLayout();
+	for (int32 Index = 0; Index < Layout.NumTiles(); ++Index)
+	{
+		const FIntPoint Tile = Layout.ToTile(Index);
+		if (Context.Grid.GetTile(Tile).IsWater()) continue;
+
+		float Scale = 1.f;
+		float BiomeCap = static_cast<float>(MaxLevel);
+		if (Context.Biomes)
+		{
+			const SResolvedBiomeBlend Blend = Context.Biomes->ResolveBiomeBlend(Context.HeightField[Index], Context.MoistureField[Index]);
+			if (Blend.Primary)
+			{
+				// The continuous blend, not the biome the tile ended up with: neighbours across a border
+				// change elevation step by step instead of jumping where the dithered border runs.
+				const UBiomeTypeData* Secondary = Blend.Secondary ? Blend.Secondary : Blend.Primary;
+				Scale = FMath::Lerp(Blend.Primary->ElevationScale, Secondary->ElevationScale, Blend.BlendAlpha);
+				BiomeCap = FMath::Lerp(static_cast<float>(Blend.Primary->MaxLevel), static_cast<float>(Secondary->MaxLevel), Blend.BlendAlpha);
+			}
+		}
+
+		const int32 Cap = FMath::Min(MaxLevel, FMath::RoundToInt32(BiomeCap));
+		const float AboveWater = FMath::Max(Context.HeightField[Index] - Context.WaterLevel, 0.f);
+		const int32 Level = FMath::Clamp(FMath::FloorToInt32(AboveWater * Scale / LevelStep), 0, FMath::Max(Cap, 0));
+		Context.Mutate(Tile, FTileMutation().SetHeight(static_cast<uint8>(Level)), TEXT("Elevation from height noise and biome"));
 	}
 }
 

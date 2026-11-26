@@ -20,6 +20,7 @@ namespace TileGenerationSpecPrivate
 	{
 		UTerrainNoisePass* Terrain = nullptr;
 		UBiomeAssignmentPass* Biomes = nullptr;
+		UElevationPass* Elevation = nullptr;
 		UTileTypePass* TileTypes = nullptr;
 		ULevelConstraintPass* Terraces = nullptr;
 		UShorePass* Shores = nullptr;
@@ -30,7 +31,7 @@ namespace TileGenerationSpecPrivate
 
 		TArray<const UTileGenerationPass*> List() const
 		{
-			return { Terrain, Biomes, TileTypes, Terraces, Shores, Smoothing, Fertility, Slopes, Ramps };
+			return { Terrain, Biomes, Elevation, TileTypes, Terraces, Shores, Smoothing, Fertility, Slopes, Ramps };
 		}
 	};
 
@@ -38,10 +39,11 @@ namespace TileGenerationSpecPrivate
 	{
 		FDefaultPasses Passes;
 		Passes.Terrain = NewObject<UTerrainNoisePass>();
-		Passes.Terrain->MaxLevel = InMaxLevel;
 		// Higher than the game default so even small test maps have both water and land.
 		Passes.Terrain->WaterLevel = 0.45f;
 		Passes.Biomes = NewObject<UBiomeAssignmentPass>();
+		Passes.Elevation = NewObject<UElevationPass>();
+		Passes.Elevation->MaxLevel = InMaxLevel;
 		Passes.TileTypes = NewObject<UTileTypePass>();
 		Passes.Terraces = NewObject<ULevelConstraintPass>();
 		Passes.Shores = NewObject<UShorePass>();
@@ -164,7 +166,7 @@ void FTileGenerationSpec::Define()
 
 			// A pass that finds nothing to do makes no changes, so only the order is checked:
 			// steps must appear in pipeline order, each in one uninterrupted block.
-			const TArray<FName> Pipeline = { TEXT("Terrain"), TEXT("Biomes"), TEXT("Tile Types"), TEXT("Terraces"), TEXT("Shores"), TEXT("Smoothing"), TEXT("Fertility"), TEXT("Slopes"), TEXT("Ramps") };
+			const TArray<FName> Pipeline = { TEXT("Terrain"), TEXT("Biomes"), TEXT("Elevation"), TEXT("Tile Types"), TEXT("Terraces"), TEXT("Shores"), TEXT("Smoothing"), TEXT("Fertility"), TEXT("Slopes"), TEXT("Ramps") };
 
 			int32 LastStepIndex = -1;
 			bool bInOrder = true;
@@ -278,40 +280,17 @@ void FTileGenerationSpec::Define()
 			TestTrue(TEXT("Water tiles have water biome, full moisture, level 0"), bWaterIsComplete);
 		});
 
-		It("keeps the world flat when MaxLevel is 0", [this]()
+		It("leaves elevation to the Elevation pass", [this]()
 		{
 			FTileGrid Grid(MakeLayout(32, 32));
 			FTileGenerationContext Context(Grid, 9);
-			NewObject<UTerrainNoisePass>()->Execute(Context);
+			UTerrainNoisePass* Terrain = NewObject<UTerrainNoisePass>();
+			Terrain->Execute(Context);
 
 			bool bFlat = true;
 			for (const FTileData& Tile : Grid.GetTiles()) bFlat &= Tile.Height == 0;
 			TestTrue(TEXT("All tiles on level 0"), bFlat);
-		});
-
-		It("assigns levels from height, water level and level step", [this]()
-		{
-			UTerrainNoisePass* Terrain = NewObject<UTerrainNoisePass>();
-			Terrain->MaxLevel = 3;
-			Terrain->LevelStep = 0.05f;
-
-			FTileGrid Grid(MakeLayout(96, 96));
-			FTileGenerationContext Context(Grid, 11);
-			Terrain->Execute(Context);
-
-			int32 Wrong = 0;
-			uint8 HighestLevel = 0;
-			for (int32 Index = 0; Index < Grid.GetLayout().NumTiles(); ++Index)
-			{
-				const FTileData& Tile = Grid.GetTile(Grid.GetLayout().ToTile(Index));
-				if (Tile.IsWater()) continue;
-
-				const int32 Expected = FMath::Clamp(FMath::FloorToInt32((Context.HeightField[Index] - Terrain->WaterLevel) / Terrain->LevelStep), 0, 3);
-				if (Tile.Height != Expected) ++Wrong;
-				HighestLevel = FMath::Max(HighestLevel, Tile.Height);
-			}
-			TestEq(*this, TEXT("Tiles on the wrong level"), Wrong, 0);
-			TestTrue(TEXT("Several levels are used"), HighestLevel >= 2);
+			TestTrue(TEXT("Water level handed on"), FMath::IsNearlyEqual(Context.WaterLevel, Terrain->WaterLevel));
 		});
 
 		It("produces the same fields for the same seed and different ones for another", [this]()
@@ -355,6 +334,111 @@ void FTileGenerationSpec::Define()
 			for (const FTileData& Tile : Grid.GetTiles()) bNoWater &= !Tile.IsWater();
 			TestTrue(TEXT("No water"), bNoWater);
 		});
+	});
+
+	Describe("UElevationPass", [this]()
+	{
+		It("keeps the world flat when MaxLevel is 0", [this]()
+		{
+			FTileGrid Grid(MakeLayout(32, 32));
+			FTileGenerationContext Context(Grid, 9);
+			NewObject<UTerrainNoisePass>()->Execute(Context);
+			UElevationPass* Elevation = NewObject<UElevationPass>();
+			Elevation->MaxLevel = 0;
+			Elevation->Execute(Context);
+
+			bool bFlat = true;
+			for (const FTileData& Tile : Grid.GetTiles()) bFlat &= Tile.Height == 0;
+			TestTrue(TEXT("All tiles on level 0"), bFlat);
+		});
+
+		It("assigns levels from height, water level and level step without biomes", [this]()
+		{
+			UTerrainNoisePass* Terrain = NewObject<UTerrainNoisePass>();
+			UElevationPass* Elevation = NewObject<UElevationPass>();
+			Elevation->MaxLevel = 3;
+			Elevation->LevelStep = 0.05f;
+
+			FTileGrid Grid(MakeLayout(96, 96));
+			FTileGenerationContext Context(Grid, 11);
+			Terrain->Execute(Context);
+			Elevation->Execute(Context);
+
+			int32 Wrong = 0;
+			uint8 HighestLevel = 0;
+			for (int32 Index = 0; Index < Grid.GetLayout().NumTiles(); ++Index)
+			{
+				const FTileData& Tile = Grid.GetTile(Grid.GetLayout().ToTile(Index));
+				if (Tile.IsWater()) continue;
+
+				const int32 Expected = FMath::Clamp(FMath::FloorToInt32((Context.HeightField[Index] - Terrain->WaterLevel) / Elevation->LevelStep), 0, 3);
+				if (Tile.Height != Expected) ++Wrong;
+				HighestLevel = FMath::Max(HighestLevel, Tile.Height);
+			}
+			TestEq(*this, TEXT("Tiles on the wrong level"), Wrong, 0);
+			TestTrue(TEXT("Several levels are used"), HighestLevel >= 2);
+		});
+
+		// Three land tiles whose noise is set by hand: plains (flat, capped at 1) and a steep forest.
+		const auto RunOnBiomes = [](int32 InMaxLevel)
+		{
+			UBiomeTypeData* Plains = MakeBiome(EBiomeType::Plains, FVector2D(0.3, 1.0), FVector2D(0.0, 0.5));
+			Plains->ElevationScale = 1.f;
+			Plains->MaxLevel = 1;
+			UBiomeTypeData* Forest = MakeBiome(EBiomeType::Forest, FVector2D(0.3, 1.0), FVector2D(0.5, 1.0));
+			Forest->ElevationScale = 2.f;
+			Forest->MaxLevel = 4;
+
+			FTileGrid Grid = MakeGrid({ TEXT("GGG") });
+			FTileGenerationContext Context(Grid, 1);
+			Context.Biomes = MakeBiomeSet({ Plains, Forest });
+			Context.WaterLevel = 0.3f;
+			Context.HeightField = { 0.8f, 0.47f, 0.6f };
+			Context.MoistureField = { 0.1f, 0.95f, 0.95f };
+
+			UElevationPass* Elevation = NewObject<UElevationPass>();
+			Elevation->MaxLevel = InMaxLevel;
+			Elevation->LevelStep = 0.1f;
+			Elevation->Execute(Context);
+			return TArray<FTileData>(Grid.GetTiles());
+		};
+
+		It("scales and caps elevation per biome", [this, RunOnBiomes]()
+		{
+			const TArray<FTileData> Tiles = RunOnBiomes(4);
+			// Plains: 0.5 above water would be level 5, but the biome stops at 1.
+			TestEq(*this, TEXT("Plains capped"), Tiles[0].Height, static_cast<uint8>(1));
+			// Forest: 0.17 above water, twice as steep: 3.4 steps.
+			TestEq(*this, TEXT("Forest scaled"), Tiles[1].Height, static_cast<uint8>(3));
+			// Forest: 6 steps, capped at the biome's 4.
+			TestEq(*this, TEXT("Forest capped"), Tiles[2].Height, static_cast<uint8>(4));
+		});
+
+		It("caps every biome with the pass's MaxLevel", [this, RunOnBiomes]()
+		{
+			const TArray<FTileData> Tiles = RunOnBiomes(2);
+			TestEq(*this, TEXT("Plains"), Tiles[0].Height, static_cast<uint8>(1));
+			TestEq(*this, TEXT("Forest"), Tiles[1].Height, static_cast<uint8>(2));
+			TestEq(*this, TEXT("Forest peak"), Tiles[2].Height, static_cast<uint8>(2));
+		});
+
+		It("keeps a biome with no elevation flat", [this]()
+		{
+			const FTestWorldData Data = MakeTestWorldData();
+			for (UBiomeTypeData* Biome : Data.Biomes->BiomeData) Biome->ElevationScale = 0.f;
+
+			FTileGrid Grid(MakeLayout(48, 48));
+			FTileGenerationContext Context(Grid, 3);
+			Context.Biomes = Data.Biomes;
+			NewObject<UTerrainNoisePass>()->Execute(Context);
+			NewObject<UElevationPass>()->Execute(Context);
+
+			bool bFlat = true;
+			for (const FTileData& Tile : Grid.GetTiles()) bFlat &= Tile.Height == 0;
+			TestTrue(TEXT("All tiles on level 0"), bFlat);
+		});
+
+
 	});
 
 	Describe("UBiomeAssignmentPass", [this]()

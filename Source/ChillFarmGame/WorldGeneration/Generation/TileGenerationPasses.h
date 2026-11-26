@@ -5,7 +5,8 @@
 #include "TileGenerationPasses.generated.h"
 
 
-// Samples the noise fields every later pass reads, marks water, and assigns elevation levels.
+// Samples the noise fields every later pass reads and marks water. Elevation levels are assigned
+// later by the Elevation pass, once biomes are known.
 UCLASS(meta = (DisplayName = "Terrain Noise"))
 class CHILLFARMGAME_API UTerrainNoisePass : public UTileGenerationPass
 {
@@ -36,13 +37,6 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Water", meta = (ClampMin = "0", ClampMax = "1"))
 	float WaterLevel = 0.3f;
 
-	// Highest elevation level. 0 keeps the world flat.
-	UPROPERTY(EditAnywhere, Category = "Elevation", meta = (ClampMin = "0", ClampMax = "16"))
-	int32 MaxLevel = 0;
-
-	// Height noise span (above water) covered by one level. Smaller values give more, narrower terraces.
-	UPROPERTY(EditAnywhere, Category = "Elevation", meta = (ClampMin = "0.01", ClampMax = "1"))
-	float LevelStep = 0.15f;
 };
 
 
@@ -56,6 +50,32 @@ public:
 	virtual void Execute(FTileGenerationContext& Context) const override;
 	virtual FName GetStepName() const override { return TEXT("Biomes"); }
 	virtual FString GetSetupError(const FTileGenerationContext& Context) const override;
+};
+
+
+// Turns the height noise into elevation levels, per biome: the height above water is multiplied by
+// the biome's ElevationScale, cut into levels of LevelStep, and capped by the biome's MaxLevel and by
+// MaxLevel here. Between two biomes the scale and the cap are blended with the same weights that
+// choose between the biomes, so elevation changes gradually across a border instead of jumping.
+// Without a biome set every land tile uses a scale of 1. The Terraces pass then limits the steps.
+UCLASS(meta = (DisplayName = "Elevation"))
+class CHILLFARMGAME_API UElevationPass : public UTileGenerationPass
+{
+	GENERATED_BODY()
+
+public:
+	virtual void Execute(FTileGenerationContext& Context) const override;
+	virtual FName GetStepName() const override { return TEXT("Elevation"); }
+
+public:
+	// Highest elevation level anywhere. 0 keeps the world flat.
+	UPROPERTY(EditAnywhere, Category = "Elevation", meta = (ClampMin = "0", ClampMax = "16"))
+	int32 MaxLevel = 4;
+
+	// Height noise span (above water) covered by one level at a biome scale of 1. Smaller values give
+	// more, narrower terraces.
+	UPROPERTY(EditAnywhere, Category = "Elevation", meta = (ClampMin = "0.01", ClampMax = "1"))
+	float LevelStep = 0.15f;
 };
 
 

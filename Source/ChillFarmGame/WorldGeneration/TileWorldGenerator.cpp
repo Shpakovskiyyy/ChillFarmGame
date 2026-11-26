@@ -25,6 +25,7 @@ ATileWorldGenerator::ATileWorldGenerator()
 	// The default pipeline. Every generator placed on a level gets its own copies, editable inline.
 	Passes.Add(CreateDefaultSubobject<UTerrainNoisePass>(TEXT("TerrainPass")));
 	Passes.Add(CreateDefaultSubobject<UBiomeAssignmentPass>(TEXT("BiomePass")));
+	Passes.Add(CreateDefaultSubobject<UElevationPass>(TEXT("ElevationPass")));
 	Passes.Add(CreateDefaultSubobject<UTileTypePass>(TEXT("TileTypePass")));
 	Passes.Add(CreateDefaultSubobject<ULevelConstraintPass>(TEXT("TerracePass")));
 	Passes.Add(CreateDefaultSubobject<UShorePass>(TEXT("ShorePass")));
@@ -32,6 +33,42 @@ ATileWorldGenerator::ATileWorldGenerator()
 	Passes.Add(CreateDefaultSubobject<UFertilityPass>(TEXT("FertilityPass")));
 	Passes.Add(CreateDefaultSubobject<USlopePass>(TEXT("SlopePass")));
 	Passes.Add(CreateDefaultSubobject<URampPass>(TEXT("RampPass")));
+}
+
+void ATileWorldGenerator::PostLoad()
+{
+	Super::PostLoad();
+	AddMissingDefaultPasses();
+}
+
+void ATileWorldGenerator::AddMissingDefaultPasses()
+{
+	const ATileWorldGenerator* Defaults = Cast<ATileWorldGenerator>(GetClass()->GetDefaultObject());
+	if (!Defaults || Defaults == this) return;
+
+	int32 InsertAt = 0;
+	for (const UTileGenerationPass* DefaultPass : Defaults->Passes)
+	{
+		if (!DefaultPass) continue;
+
+		const int32 Existing = Passes.IndexOfByPredicate([DefaultPass](const UTileGenerationPass* Pass)
+		{
+			return Pass && Pass->GetClass() == DefaultPass->GetClass();
+		});
+		if (Existing != INDEX_NONE)
+		{
+			InsertAt = FMath::Max(InsertAt, Existing + 1);
+			continue;
+		}
+
+		// A copy of the default pass, with its default settings, owned by this generator like the others.
+		const FName Name = MakeUniqueObjectName(this, DefaultPass->GetClass(), DefaultPass->GetFName());
+		UTileGenerationPass* Added = NewObject<UTileGenerationPass>(this, DefaultPass->GetClass(), Name, RF_Transactional, const_cast<UTileGenerationPass*>(DefaultPass));
+		Passes.Insert(Added, InsertAt++);
+
+		UE_LOG(LogTileWorldGenerator, Display, TEXT("'%s': Added the %s pass, which the default pipeline gained after this level was saved"),
+			*GetNameSafe(this), *Added->GetStepName().ToString());
+	}
 }
 
 FTileGridLayout ATileWorldGenerator::MakeLayout() const

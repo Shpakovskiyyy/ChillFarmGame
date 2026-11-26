@@ -46,6 +46,15 @@ public:
 	UPROPERTY(EditDefaultsOnly, Category = "Shore")
 	ETileType ShoreTile = ETileType::Sand;
 
+	// How strongly the height noise turns into elevation levels in this biome (see the Elevation pass):
+	// below 1 flattens it (plains), above 1 makes it steeper (mountains). 0 keeps the biome flat.
+	UPROPERTY(EditDefaultsOnly, Category = "Elevation", meta = (ClampMin = "0", ClampMax = "4"))
+	float ElevationScale = 1.f;
+
+	// Highest level this biome reaches. The Elevation pass's MaxLevel caps every biome as well.
+	UPROPERTY(EditDefaultsOnly, Category = "Elevation", meta = (ClampMin = "0", ClampMax = "16"))
+	int32 MaxLevel = 16;
+
 	// Not used by any pass. Kept so existing assets keep their values while the shore rules are redesigned.
 	UPROPERTY(EditDefaultsOnly, Category = "Unused")
 	bool bAllowWater = false;

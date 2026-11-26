@@ -30,6 +30,8 @@ class CHILLFARMGAME_API ATileWorldGenerator : public AActor
 public:
 	ATileWorldGenerator();
 
+	virtual void PostLoad() override;
+
 public:
 	UFUNCTION(CallInEditor, BlueprintCallable, Category = "Generation")
 	void GenerateWorld();
@@ -48,6 +50,11 @@ public:
 
 private:
 	ATileVisualGrid* FindVisualGrid();
+
+	// A level stores its own copy of the pass list, so a pass added to the default pipeline after the
+	// level was saved would be missing there and silently never run. Puts every such pass back, right
+	// after the default passes that come before it.
+	void AddMissingDefaultPasses();
 
 protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Generation")
@@ -86,7 +93,9 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Data")
 	UTilesGenerationRuleSet* DefaultTileGenerationRuleSet = nullptr;
 
-	// Run in order. Each pass builds on the results of the ones before it.
+	// Run in order. Each pass builds on the results of the ones before it. Passes the default pipeline
+	// gained after the level was saved are added when the level loads, so turn a pass off with its
+	// Enabled flag rather than removing it.
 	UPROPERTY(EditAnywhere, Instanced, Category = "Passes")
 	TArray<TObjectPtr<UTileGenerationPass>> Passes;
 
