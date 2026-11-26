@@ -91,7 +91,9 @@ public:
 };
 
 
-// Cuts elevation into terraces: direct neighbours never differ by more than MaxStep levels.
+// Cuts elevation into terraces: direct neighbours never differ by more than MaxStep levels, and no
+// terrace is smaller than MinTerraceSize tiles: smaller pieces of a level (specks, thin strips) take
+// the level of the land around them. Pieces that only water surrounds stay.
 UCLASS(meta = (DisplayName = "Terraces"))
 class CHILLFARMGAME_API ULevelConstraintPass : public UTileGenerationPass
 {
@@ -104,6 +106,10 @@ public:
 public:
 	UPROPERTY(EditAnywhere, Category = "Elevation", meta = (ClampMin = "1", ClampMax = "4"))
 	int32 MaxStep = 1;
+
+	// Smallest terrace, in tiles. 1 keeps every piece.
+	UPROPERTY(EditAnywhere, Category = "Elevation", meta = (ClampMin = "1", ClampMax = "256"))
+	int32 MinTerraceSize = 12;
 };
 
 

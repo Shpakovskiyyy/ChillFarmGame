@@ -45,6 +45,9 @@ public:
 	// The layout the next generation will use.
 	FTileGridLayout MakeLayout() const;
 
+	// The pipeline, in order. Tools that run generation outside a level (the terrain report) copy it.
+	const TArray<TObjectPtr<UTileGenerationPass>>& GetPasses() const { return Passes; }
+
 	// Regenerate when the level is opened in the editor (the map itself is not saved, only the seed).
 	bool ShouldGenerateOnEditorLoad() const { return bGenerateWhenLevelOpens; }
 

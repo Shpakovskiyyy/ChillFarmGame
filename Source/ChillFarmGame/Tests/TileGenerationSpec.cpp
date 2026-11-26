@@ -10,6 +10,7 @@
 #include "Generation/TileGenerationPasses.h"
 #include "TileReachability.h"
 #include "TileCliffs.h"
+#include "TileAlgorithms.h"
 
 using namespace TileTestUtils;
 
@@ -542,7 +543,10 @@ void FTileGenerationSpec::Define()
 			TArray<FTileChange> Changes;
 			Context.OnChange = [&Changes](const FTileChange& Change) { Changes.Add(Change); };
 
-			NewObject<ULevelConstraintPass>()->Execute(Context);
+			// Only the step limit here: the merge would also flatten the one-tile peak.
+			ULevelConstraintPass* Pass = NewObject<ULevelConstraintPass>();
+			Pass->MinTerraceSize = 1;
+			Pass->Execute(Context);
 
 			TestEq(*this, TEXT("Peak"), Grid.GetTile(FIntPoint(1, 1)).Height, static_cast<uint8>(1));
 			if (!TestEq(*this, TEXT("One change"), Changes.Num(), 1)) return;
@@ -558,6 +562,7 @@ void FTileGenerationSpec::Define()
 			FTileGenerationContext Context(Grid, 1);
 			ULevelConstraintPass* Pass = NewObject<ULevelConstraintPass>();
 			Pass->MaxStep = 2;
+			Pass->MinTerraceSize = 1;
 			Pass->Execute(Context);
 
 			TestEq(*this, TEXT("Last tile kept"), Grid.GetTile(FIntPoint(3, 0)).Height, static_cast<uint8>(6));
@@ -565,6 +570,36 @@ void FTileGenerationSpec::Define()
 			Pass->MaxStep = 1;
 			Pass->Execute(Context);
 			TestEq(*this, TEXT("Now cut to steps of one"), Grid.GetTile(FIntPoint(3, 0)).Height, static_cast<uint8>(3));
+		});
+
+		It("merges terraces smaller than MinTerraceSize into the land around them", [this]()
+		{
+			FTileGrid Grid = MakeGrid({ TEXT("GGGGGG"), TEXT("GGGGGG"), TEXT("GGGGGG"), TEXT("GGGGGG") });
+			SetHeights(Grid, { TEXT("000000"), TEXT("011000"), TEXT("000000"), TEXT("000000") });
+
+			FTileGenerationContext Context(Grid, 1);
+			TArray<FTileChange> Changes;
+			Context.OnChange = [&Changes](const FTileChange& Change) { Changes.Add(Change); };
+			ULevelConstraintPass* Pass = NewObject<ULevelConstraintPass>();
+			Pass->MinTerraceSize = 4;
+			Pass->Execute(Context);
+
+			for (const FTileData& Tile : Grid.GetTiles()) TestEq(*this, TEXT("Flat"), Tile.Height, static_cast<uint8>(0));
+			if (!TestEq(*this, TEXT("Two changes"), Changes.Num(), 2)) return;
+			TestEq(*this, TEXT("Reason"), Changes[0].Context.Reason, FName(TEXT("Too small for a terrace")));
+		});
+
+		It("keeps terraces of MinTerraceSize and more", [this]()
+		{
+			FTileGrid Grid = MakeGrid({ TEXT("GGGGGG"), TEXT("GGGGGG"), TEXT("GGGGGG"), TEXT("GGGGGG") });
+			SetHeights(Grid, { TEXT("000000"), TEXT("011000"), TEXT("011000"), TEXT("000000") });
+
+			FTileGenerationContext Context(Grid, 1);
+			ULevelConstraintPass* Pass = NewObject<ULevelConstraintPass>();
+			Pass->MinTerraceSize = 4;
+			Pass->Execute(Context);
+
+			TestEq(*this, TEXT("Terrace kept"), Grid.GetTile(FIntPoint(1, 1)).Height, static_cast<uint8>(1));
 		});
 	});
 
@@ -1056,6 +1091,19 @@ void FTileGenerationSpec::Define()
 					}
 				}
 				TestEq(*this, FString::Printf(TEXT("Seed %d: land next to land it cannot be walked to"), Seed), CutOffSteps, 0);
+
+				// No terrace smaller than the Terraces pass allows, unless only water surrounds it: a merge
+				// on the final levels finds nothing to do.
+				TArray<uint8> Levels;
+				TArray<bool> IsLand;
+				for (const FTileData& Tile : Grid.GetTiles())
+				{
+					Levels.Add(Tile.Height);
+					IsLand.Add(TileReachability::IsWalkable(Tile));
+				}
+				const int32 MinSize = GetDefault<ULevelConstraintPass>()->MinTerraceSize;
+				TestEq(*this, FString::Printf(TEXT("Seed %d: tiles in terraces that are too small"), Seed),
+					TileAlgorithms::MergeSmallAreas(Levels, IsLand, Layout.Size, MinSize), 0);
 				TestEq(*this, FString::Printf(TEXT("Seed %d: slopes with opposite or all corners raised"), Seed), InvalidSlopes, 0);
 				TestTrue(FString::Printf(TEXT("Seed %d: has slopes"), Seed), Slopes > 0);
 				TestTrue(FString::Printf(TEXT("Seed %d: some cliffs stay"), Seed), Cliffs > 0);

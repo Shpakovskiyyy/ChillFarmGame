@@ -323,6 +323,50 @@ void FTileAlgorithmsSpec::Define()
 			TestEq(*this, TEXT("Groups"), Keys.Num(), 2);
 		});
 	});
+
+	Describe("MergeSmallAreas", [this]()
+	{
+		const FIntPoint Size3(3, 3);
+		const TArray<bool> AllLand = { true, true, true, true, true, true, true, true, true };
+
+		It("flattens a one-tile bump into its surroundings", [this, Size3, AllLand]()
+		{
+			TArray<uint8> Levels = { 0, 0, 0, 0, 1, 0, 0, 0, 0 };
+			TestEq(*this, TEXT("Changed"), TileAlgorithms::MergeSmallAreas(Levels, AllLand, Size3, 2), 1);
+			TestEq(*this, TEXT("Centre"), Levels[4], static_cast<uint8>(0));
+		});
+
+		It("takes the level most of its surroundings have, the lower one on a tie", [this, Size3, AllLand]()
+		{
+			TArray<uint8> Majority = { 1, 1, 1, 1, 0, 1, 2, 2, 1 };
+			TileAlgorithms::MergeSmallAreas(Majority, AllLand, Size3, 2);
+			TestEq(*this, TEXT("Majority"), Majority[4], static_cast<uint8>(1));
+
+			// Up and left are 1, right and down are 2: two neighbours each, both areas big enough to stay.
+			TArray<uint8> Tie = { 1, 1, 2, 1, 0, 2, 2, 2, 2 };
+			TileAlgorithms::MergeSmallAreas(Tie, AllLand, Size3, 2);
+			TestEq(*this, TEXT("Tie"), Tie[4], static_cast<uint8>(1));
+		});
+
+		It("leaves a piece that only water surrounds", [this, Size3]()
+		{
+			TArray<uint8> Levels = { 0, 0, 0, 0, 1, 0, 0, 0, 0 };
+			const TArray<bool> Islet = { false, false, false, false, true, false, false, false, false };
+			TestEq(*this, TEXT("Changed"), TileAlgorithms::MergeSmallAreas(Levels, Islet, Size3, 4), 0);
+			TestEq(*this, TEXT("Centre"), Levels[4], static_cast<uint8>(1));
+		});
+
+		It("keeps areas of the minimum size and does nothing for a size of 1", [this]()
+		{
+			TArray<uint8> Halves = { 0, 0, 1, 1, 0, 0, 1, 1 };
+			const TArray<bool> Land = { true, true, true, true, true, true, true, true };
+			TestEq(*this, TEXT("Size 4"), TileAlgorithms::MergeSmallAreas(Halves, Land, FIntPoint(4, 2), 4), 0);
+
+			TArray<uint8> Bump = { 0, 1, 0 };
+			const TArray<bool> Row = { true, true, true };
+			TestEq(*this, TEXT("Size 1"), TileAlgorithms::MergeSmallAreas(Bump, Row, FIntPoint(3, 1), 1), 0);
+		});
+	});
 }
 
 #endif // WITH_DEV_AUTOMATION_TESTS

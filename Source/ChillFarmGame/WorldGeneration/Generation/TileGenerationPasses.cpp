@@ -196,12 +196,38 @@ void ULevelConstraintPass::Execute(FTileGenerationContext& Context) const
 		Levels[Index] = Tiles[Index].Height;
 	}
 
-	if (TileAlgorithms::ClampLevelSteps(Levels, Layout.Size, static_cast<uint8>(MaxStep)) == 0) return;
+	TileAlgorithms::ClampLevelSteps(Levels, Layout.Size, static_cast<uint8>(MaxStep));
+
+	// Merge terraces that are too small, then clamp again: a merge can put a tile two levels from a
+	// neighbour, and a clamp can leave a new small piece behind, so repeat until both are settled.
+	TArray<bool> IsLand;
+	IsLand.SetNumUninitialized(Tiles.Num());
+	for (int32 Index = 0; Index < Tiles.Num(); ++Index)
+	{
+		IsLand[Index] = Tiles[Index].IsGenerated() && !Tiles[Index].IsWater();
+	}
+
+	TArray<bool> Merged;
+	Merged.Init(false, Tiles.Num());
+	TArray<uint8> BeforeMerge;
+	constexpr int32 MaxRounds = 8;
+	for (int32 Round = 0; Round < MaxRounds && MinTerraceSize > 1; ++Round)
+	{
+		BeforeMerge = Levels;
+		const int32 MergedTiles = TileAlgorithms::MergeSmallAreas(Levels, IsLand, Layout.Size, MinTerraceSize);
+		for (int32 Index = 0; Index < Levels.Num(); ++Index)
+		{
+			if (Levels[Index] != BeforeMerge[Index]) Merged[Index] = true;
+		}
+		const int32 ClampedTiles = TileAlgorithms::ClampLevelSteps(Levels, Layout.Size, static_cast<uint8>(MaxStep));
+		if (MergedTiles == 0 && ClampedTiles == 0) break;
+	}
 
 	for (int32 Index = 0; Index < Levels.Num(); ++Index)
 	{
-		if (Levels[Index] == Context.Grid.GetTiles()[Index].Height) continue;
-		Context.Mutate(Layout.ToTile(Index), FTileMutation().SetHeight(Levels[Index]), TEXT("Steeper than one level"));
+		if (Levels[Index] == Tiles[Index].Height) continue;
+		Context.Mutate(Layout.ToTile(Index), FTileMutation().SetHeight(Levels[Index]),
+			Merged[Index] ? FName(TEXT("Too small for a terrace")) : FName(TEXT("Steeper than one level")));
 	}
 }
 

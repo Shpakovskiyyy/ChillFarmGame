@@ -88,7 +88,7 @@ One per world (editor, PIE, game). Owns the live grid.
 | Biomes | noise fields, biome set | biome, moisture |
 | Elevation | height and moisture noise, water level, biome set | height levels, scaled and capped per biome (see D16) |
 | Tile Types | biome rule sets | tile type |
-| Terraces | height levels | height levels (no neighbours more than one level apart) |
+| Terraces | height levels | height levels (no neighbours more than one level apart, no terrace smaller than `MinTerraceSize`) |
 | Shores | tile types, biome set | shore tile type next to water |
 | Smoothing | tile types, biome set | replaces isolated land tiles |
 | Fertility | final tile types, moisture, biome set | fertility = biome base × soil factor of the tile type × moisture factor |
@@ -118,13 +118,16 @@ Automation specs live in `Source/ChillFarmGame/Tests`, grouped under `ChillFarmG
 | Spec | Covers |
 |---|---|
 | `Data` | `FTileData` diff and field names, `FTileMutation` (only set fields, real changes only, flags), `FTileGridLayout` (index and world round trips, tile edges, negative positions, levels, bounds), `FTileGrid` |
-| `Algorithms` | Terrace clamping (checked against a brute-force reference on random fields, never raises, idempotent), autotile resolver (every piece and rotation, map edges) |
+| `Algorithms` | Terrace clamping (checked against a brute-force reference on random fields, never raises, idempotent), merging small terraces (majority level, ties, water-locked pieces), autotile resolver (every piece and rotation, map edges) |
 | `BiomesAndRules` | Biome selection and blending, `FindBiome`, rule order and noise sources |
 | `Generation` | Generation context, `TileGeneration::RunPasses` (order, disabled passes, all-or-nothing setup check), each pass on hand-made grids, and the full pipeline: determinism, world invariants (no steep steps, shores are sand, water on level 0...), and replaying the recorded history rebuilds the exact final world |
 | `Subsystem` | `UTileWorldSubsystem` events, runtime edits, position lookup |
 | `Cliffs` | Which edges get a side (raised tiles, deeper drops, map edges, chunk ranges, slopes), wall and slope piece placement for any mesh pivot |
 | `Farming` | Tilling and watering rules (no farmland on slopes), the use action, a gameplay change reaching listeners with its step |
 | `Reachability` | Which neighbours can be stepped between (corner heights, slopes, water), walkable areas and land islands |
+| `TerrainStats` | The terrain numbers: flat and raised land, cliff edges, flat areas, farm sites and non-overlapping farm plots, largest flat square, distance to the edge of a terrace |
+
+`ChillFarmGame.Reports.TerrainStats` is not a check but a report: it runs the game's default pipeline with the GenerationTest biome data on seeds 1..12 for several `LevelStep` values and writes the numbers per seed and on average to the log and `Saved/Reports/TerrainStats.md`. Use it when tuning generation settings.
 
 Grids in tests are written as rows of characters (`G` grass, `W` water...) with `TileTestUtils::MakeGrid`, so the expected map is readable in the test itself. Equality checks use `TileTestUtils::TestEq`, which prints both values on failure and does not depend on engine-version-specific `TestEqual` overloads.
 
@@ -268,7 +271,9 @@ Each entry: what it was, what it is now, why, and what it costs.
 - **After:** a new Elevation pass runs right after Biomes. The height above water is multiplied by the biome's `ElevationScale`, cut into levels of `LevelStep`, and capped by the biome's `MaxLevel` and the pass's `MaxLevel` (default 4). Between two biomes the scale and the cap are blended with the same weights that choose between the biomes, so elevation changes gradually instead of jumping where the dithered border runs; the Terraces pass then limits steps to one level. Without a biome set the scale is 1. Test values: plains 0.5 / 1, forest 0.8 / 2, desert 1.0 / 2, mountains 1.4 / 4.
 - Placed generators keep their own copy of the pass list, so a pass added to the default pipeline later was silently missing from saved levels (this is why GenerationTest stayed flat). `ATileWorldGenerator::PostLoad` now adds every missing default pass in its pipeline position and logs it. Passes are switched off with their Enabled flag, so adding a missing one never undoes a choice.
 - **Why:** a farm game wants flat land to farm next to hills worth looking at. Elevation belongs to the biome like fertility does, and the setting lives on the biome asset where the rest of the biome is tuned.
-- **Cost:** the Elevation pass reads the biome blend again instead of storing it; cheap at this map size. The global `MaxLevel` moved from Terrain to Elevation, so a value saved on a level's Terrain pass is dropped. Next: the terrain numbers report (flat share, farm room, terrace width) to tune the biome values against.
+- **Cost:** the Elevation pass reads the biome blend again instead of storing it; cheap at this map size. The global `MaxLevel` moved from Terrain to Elevation, so a value saved on a level's Terrain pass is dropped. Measured with the terrain report (128 × 128, 12 seeds, `LevelStep` 0.15): 92% of land flat, 37% raised, about 36 non-overlapping 12 × 12 farm plots per map (fewest 20), flat tiles on average 4.7 tiles from a terrace edge (terraces roughly 9 wide), 23 ramp tiles. 0.10 gives more, narrower terraces (63% raised, 23 plots); 0.20 flatter maps (29% raised, 44 plots). 0.15 stays.
+- **Small terraces:** the numbers showed about 130 flat areas per map, many of them a few tiles: specks of a level that break up the land and each need a ramp. The Terraces pass now merges every terrace smaller than `MinTerraceSize` (12 tiles) into the level most of its surroundings have (`TileAlgorithms::MergeSmallAreas`), alternating with the step clamp until both are settled; pieces that only water surrounds stay. Result at 0.15: 99 flat areas, 7.5 ramp tiles instead of 23, 38 farm plots (fewest 24 instead of 20), 875 cliff edges instead of 934. The full-pipeline spec checks that no terrace below the minimum is left.
+- **Open:** "Farm sites" (flat areas that hold a plot) is too coarse: one big plain counts once. Roadmap step 4 replaces it with scored sites.
 ---
 
 ## 5. What I deliberately did not change
@@ -296,7 +301,7 @@ When you open the project after these commits:
 Nothing below was possible without an Unreal toolchain.
 
 1. Build `ChillFarmGameEditor` (Development Editor). Fix anything the compiler finds; the most likely spots are engine API signatures in `TileVisualGrid.cpp`, `ViewportMouseClickNotifier.cpp` and `STileInspectorWindow.cpp`.
-2. Session Frontend → Automation → run `ChillFarmGame.TileWorld` (147 specs, see section 2.6).
+2. Session Frontend → Automation → run `ChillFarmGame.TileWorld` (158 specs, see section 2.6; the terrain report runs separately).
 3. Open the test map: the world appears without pressing Generate.
 4. Click a tile: yellow box on that tile, inspector shows type/biome/fertility/moisture and readable history.
 5. Click inside the Tile Inspector tab while it overlaps the viewport: nothing gets selected.
@@ -311,11 +316,11 @@ Ordered so each step is visible and testable on its own, and nothing already wor
 
 1. **Cliffs and slopes.** First versions done (D12, D14): stretched walls per edge, corner-based slopes mixed in by noise. Missing: outer and inner corner meshes (D14 says what they must look like). Still to evaluate for the final look: Evaluate the dual grid: the visual grid is offset by half a tile and each visual tile reads its four corners (marching squares), which needs about six shapes instead of the current 8-neighbour piece set and handles both surface transitions and cliffs. The neighbour mask must also treat a same-type neighbour at another level as different.
 2. **Ramps and reachability.** Done (D13, D14): slopes join much of the land, and the Ramps pass joins every remaining terrace to the rest of its island. Once roads exist, start the flood fill from the road instead of the largest area.
-3. **Water.** Rivers carved downhill as a pass; water level per lake instead of a global threshold.
+3. **Water and valleys.** Rivers carved downhill as a pass; water level per lake instead of a global threshold. Together with it, valleys below the ground: `Height` stays unsigned, but the ground gets a base level (plains at, say, level 2 instead of 0), so valleys, canyons, river beds and sunken lakes can go below it. To the player those are negative levels; the data counts from the deepest point.
 4. **Roads and farm sites.** A* road pass over a cost field (slope, water, biome). Derived per-tile fields with breadth-first distance transforms: distance to water, to road, size of the flat area. A scoring pass that rates farm sites and a validation pass that guarantees enough good ones. The inspector overlay for these fields is the prototype of the player's site selection screen.
 5. **Gameplay edits.** Tilling and watering are in (`TileFarming`, right mouse, `ETileType::Farmland`, `ETileFlags::Watered`); building is next. All through `UTileWorldSubsystem::MutateTile` with `ETileMutationSource::Gameplay`. Keep crops, buildings and items out of `FTileData`: they are sparse objects keyed by tile coordinate in their own systems, which listen to tile changes.
 6. **Saving.** Seed + generation settings + the list of gameplay changes (or a diff of the grid against a fresh generation). Small, and old saves keep working when unrelated generation code changes only if generation stays deterministic, which the determinism test guards.
-7. **Scale.** Larger maps: run passes on a worker thread (they already have no world access), then chunk streaming for visuals.
+7. **Scale.** The target is a big world with high mountains: larger maps, higher per-biome `MaxLevel` for mountains, tuned with the terrain report at the real map size once generation is complete. Run passes on a worker thread (they already have no world access), then chunk streaming for visuals.
 8. **Rendering decision.** Revisit HISM vs. generated chunk meshes once cliffs exist and the target map size is known.
 
 ---
