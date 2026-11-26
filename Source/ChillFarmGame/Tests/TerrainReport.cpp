@@ -28,23 +28,44 @@ namespace TerrainReportPrivate
 
 	constexpr int32 NumSeeds = 12;
 	constexpr int32 PlotSize = 12;
-	const float LevelSteps[] = { 0.10f, 0.15f, 0.20f };
 
-	struct FRow
+	// One table per variant: the default pipeline with a few settings changed. A value below 0 keeps
+	// the pipeline's default.
+	struct FReportVariant
+	{
+		const TCHAR* Label;
+		float LevelStep;
+		float MinLakeDepth;
+	};
+	const FReportVariant Variants[] = {
+		{ TEXT("Defaults"),          -1.f,  -1.f },
+		{ TEXT("LevelStep 0.10"),    0.10f, -1.f },
+		{ TEXT("LevelStep 0.20"),    0.20f, -1.f },
+		{ TEXT("Lake depth 0.01"),   -1.f,  0.01f },
+		{ TEXT("Lake depth 0.005"),  -1.f,  0.005f },
+	};
+
+	// Changes counted by the step and reason that made them.
+	struct FReportRow
 	{
 		int32 Seed = 0;
 		FTileTerrainStats Stats;
-		int32 Ramps = 0;
+		float Ramps = 0.f;
+		float LakeTiles = 0.f;
+		float RiverTiles = 0.f;
 	};
 
-	FString FormatRow(const FString& InLabel, const FTileTerrainStats& Stats, float InRamps)
+	FString FormatRow(const FString& InLabel, const FTileTerrainStats& Stats, const FReportRow& InCounts)
 	{
-		return FString::Printf(TEXT("| %s | %.0f%% | %.0f%% | %d | %d | %d | %d | %d | %.1f | %.1f |"),
+		return FString::Printf(TEXT("| %s | %.0f%% | %.0f%% | %d | %d | %d | %d | %d | %.1f | %.1f | %.0f | %.0f |"),
 			*InLabel, Stats.FlatShare() * 100.f, Stats.RaisedShare() * 100.f, Stats.CliffEdges, Stats.FlatAreas,
-			Stats.FarmSites, Stats.FarmPlots, Stats.LargestFlatSquare, Stats.MeanEdgeDistance, InRamps);
+			Stats.FarmSites, Stats.FarmPlots, Stats.LargestFlatSquare, Stats.MeanEdgeDistance,
+			InCounts.Ramps, InCounts.LakeTiles, InCounts.RiverTiles);
 	}
 
-	const TCHAR* ReportTableHeader = TEXT("| | Flat | Raised | Cliff edges | Flat areas | Farm sites | Farm plots | Largest flat square | Mean edge distance | Ramps |\n|---|---|---|---|---|---|---|---|---|---|");
+	const TCHAR* ReportTableHeader =
+		TEXT("| | Flat | Raised | Cliff edges | Flat areas | Farm sites | Farm plots | Largest flat square | Mean edge distance | Ramps | Lake tiles | River tiles |\n")
+		TEXT("|---|---|---|---|---|---|---|---|---|---|---|---|");
 }
 
 using namespace TerrainReportPrivate;
@@ -66,11 +87,11 @@ bool FTerrainReport::RunTest(const FString& Parameters)
 	const FTileGridLayout Layout = Generator->MakeLayout();
 
 	FString Report = FString::Printf(TEXT("# Terrain report\n\n%d x %d tiles, seeds 1..%d, farm site = flat area holding a %d x %d plot. ")
-		TEXT("The game's default pipeline and the GenerationTest biome data; only LevelStep changes between the tables.\n"),
+		TEXT("The game's default pipeline and the GenerationTest biome data, with the settings named in each table changed.\n"),
 		Layout.Size.X, Layout.Size.Y, NumSeeds, PlotSize, PlotSize);
-	FString Summary = FString::Printf(TEXT("\n## Averages per LevelStep\n\n%s\n"), ReportTableHeader);
+	FString Summary = FString::Printf(TEXT("\n## Averages per variant\n\n%s\n"), ReportTableHeader);
 
-	for (const float LevelStep : LevelSteps)
+	for (const FReportVariant& Variant : Variants)
 	{
 		// A private copy of the pipeline, so the settings can change without touching the defaults.
 		TArray<UTileGenerationPass*> Copies;
@@ -78,12 +99,14 @@ bool FTerrainReport::RunTest(const FString& Parameters)
 		{
 			if (!Pass) continue;
 			UTileGenerationPass* Copy = DuplicateObject<UTileGenerationPass>(Pass, GetTransientPackage());
-			if (UElevationPass* Elevation = Cast<UElevationPass>(Copy)) Elevation->LevelStep = LevelStep;
+			if (UElevationPass* Elevation = Cast<UElevationPass>(Copy); Elevation && Variant.LevelStep > 0.f) Elevation->LevelStep = Variant.LevelStep;
+			if (ULakesAndRiversPass* Water = Cast<ULakesAndRiversPass>(Copy); Water && Variant.MinLakeDepth > 0.f) Water->MinLakeDepth = Variant.MinLakeDepth;
 			Copies.Add(Copy);
 		}
 		const TArray<const UTileGenerationPass*> PassList(Copies);
 
-		TArray<FRow> Rows;
+		TArray<FReportRow> Rows;
+		Rows.Reserve(NumSeeds);
 		for (int32 Seed = 1; Seed <= NumSeeds; ++Seed)
 		{
 			FTileGrid Grid(Layout);
@@ -91,11 +114,13 @@ bool FTerrainReport::RunTest(const FString& Parameters)
 			Context.Biomes = Biomes;
 			Context.DefaultRuleSet = DefaultRules;
 
-			FRow& Row = Rows.AddDefaulted_GetRef();
+			FReportRow& Row = Rows.AddDefaulted_GetRef();
 			Row.Seed = Seed;
 			Context.OnChange = [&Row](const FTileChange& Change)
 			{
 				if (Change.Context.Step == FName(TEXT("Ramps"))) ++Row.Ramps;
+				if (Change.Context.Reason == FName(TEXT("Fills a basin"))) ++Row.LakeTiles;
+				if (Change.Context.Reason == FName(TEXT("River"))) ++Row.RiverTiles;
 			};
 
 			if (!TileGeneration::RunPasses(PassList, Context))
@@ -106,14 +131,14 @@ bool FTerrainReport::RunTest(const FString& Parameters)
 			Row.Stats = TileTerrainStats::Compute(Grid, PlotSize);
 		}
 
-		Report += FString::Printf(TEXT("\n## LevelStep %.2f\n\n%s\n"), LevelStep, ReportTableHeader);
+		Report += FString::Printf(TEXT("\n## %s\n\n%s\n"), Variant.Label, ReportTableHeader);
 		FTileTerrainStats Sum;
-		float FlatShare = 0.f, RaisedShare = 0.f, Ramps = 0.f;
+		FReportRow Counts;
 		int32 FewestSites = MAX_int32;
 		int32 FewestPlots = MAX_int32;
-		for (const FRow& Row : Rows)
+		for (const FReportRow& Row : Rows)
 		{
-			Report += FormatRow(FString::Printf(TEXT("Seed %d"), Row.Seed), Row.Stats, static_cast<float>(Row.Ramps)) + TEXT("\n");
+			Report += FormatRow(FString::Printf(TEXT("Seed %d"), Row.Seed), Row.Stats, Row) + TEXT("\n");
 			Sum.LandTiles += Row.Stats.LandTiles;
 			Sum.FlatTiles += Row.Stats.FlatTiles;
 			Sum.RaisedTiles += Row.Stats.RaisedTiles;
@@ -123,7 +148,9 @@ bool FTerrainReport::RunTest(const FString& Parameters)
 			Sum.FarmPlots += Row.Stats.FarmPlots;
 			Sum.LargestFlatSquare += Row.Stats.LargestFlatSquare;
 			Sum.MeanEdgeDistance += Row.Stats.MeanEdgeDistance;
-			Ramps += Row.Ramps;
+			Counts.Ramps += Row.Ramps / NumSeeds;
+			Counts.LakeTiles += Row.LakeTiles / NumSeeds;
+			Counts.RiverTiles += Row.RiverTiles / NumSeeds;
 			FewestSites = FMath::Min(FewestSites, Row.Stats.FarmSites);
 			FewestPlots = FMath::Min(FewestPlots, Row.Stats.FarmPlots);
 		}
@@ -136,7 +163,7 @@ bool FTerrainReport::RunTest(const FString& Parameters)
 		Mean.FarmPlots = FMath::RoundToInt32(static_cast<float>(Sum.FarmPlots) / NumSeeds);
 		Mean.LargestFlatSquare = FMath::RoundToInt32(static_cast<float>(Sum.LargestFlatSquare) / NumSeeds);
 		Mean.MeanEdgeDistance = Sum.MeanEdgeDistance / NumSeeds;
-		Summary += FormatRow(FString::Printf(TEXT("%.2f (fewest: %d sites, %d plots)"), LevelStep, FewestSites, FewestPlots), Mean, Ramps / NumSeeds) + TEXT("\n");
+		Summary += FormatRow(FString::Printf(TEXT("%s (fewest: %d sites, %d plots)"), Variant.Label, FewestSites, FewestPlots), Mean, Counts) + TEXT("\n");
 	}
 
 	Report += Summary;

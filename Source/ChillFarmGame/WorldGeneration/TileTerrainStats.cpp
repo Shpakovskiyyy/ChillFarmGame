@@ -16,6 +16,13 @@ FTileTerrainStats TileTerrainStats::Compute(const FTileGrid& InGrid, int32 InPlo
 		return TileReachability::IsWalkable(InTile) && !InTile.IsSlope();
 	};
 
+	// The base ground: the lowest level any land is on.
+	int32 BaseLevel = MAX_int32;
+	for (const FTileData& Tile : InGrid.GetTiles())
+	{
+		if (TileReachability::IsWalkable(Tile)) BaseLevel = FMath::Min<int32>(BaseLevel, Tile.Height);
+	}
+
 	// Counts and cliffs. Each pair of neighbours is looked at once, from the left or upper tile.
 	for (int32 Index = 0; Index < NumTiles; ++Index)
 	{
@@ -25,7 +32,7 @@ FTileTerrainStats TileTerrainStats::Compute(const FTileGrid& InGrid, int32 InPlo
 
 		++Stats.LandTiles;
 		if (!Data.IsSlope()) ++Stats.FlatTiles;
-		if (Data.Height > 0) ++Stats.RaisedTiles;
+		if (Data.Height > BaseLevel) ++Stats.RaisedTiles;
 
 		for (const FIntPoint& Offset : { FIntPoint(1, 0), FIntPoint(0, 1) })
 		{

@@ -26,6 +26,7 @@ ATileWorldGenerator::ATileWorldGenerator()
 	Passes.Add(CreateDefaultSubobject<UTerrainNoisePass>(TEXT("TerrainPass")));
 	Passes.Add(CreateDefaultSubobject<UBiomeAssignmentPass>(TEXT("BiomePass")));
 	Passes.Add(CreateDefaultSubobject<UElevationPass>(TEXT("ElevationPass")));
+	Passes.Add(CreateDefaultSubobject<ULakesAndRiversPass>(TEXT("LakesAndRiversPass")));
 	Passes.Add(CreateDefaultSubobject<UTileTypePass>(TEXT("TileTypePass")));
 	Passes.Add(CreateDefaultSubobject<ULevelConstraintPass>(TEXT("TerracePass")));
 	Passes.Add(CreateDefaultSubobject<UShorePass>(TEXT("ShorePass")));
@@ -66,7 +67,7 @@ void ATileWorldGenerator::AddMissingDefaultPasses()
 		UTileGenerationPass* Added = NewObject<UTileGenerationPass>(this, DefaultPass->GetClass(), Name, RF_Transactional, const_cast<UTileGenerationPass*>(DefaultPass));
 		Passes.Insert(Added, InsertAt++);
 
-		UE_LOG(LogTileWorldGenerator, Display, TEXT("'%s': Added the %s pass, which the default pipeline gained after this level was saved"),
+		UE_LOG(LogTileWorldGenerator, Display, TEXT("'%s': Added the %s pass, which the default pipeline gained after this level was saved. Save the level to keep it"),
 			*GetNameSafe(this), *Added->GetStepName().ToString());
 	}
 }

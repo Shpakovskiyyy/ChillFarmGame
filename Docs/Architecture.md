@@ -34,7 +34,7 @@ flowchart TB
 
     subgraph Gen["Generation (no world access)"]
         GC[FTileGenerationContext]
-        P1[Terrain] --> P2[Biomes] --> P2b[Elevation] --> P3[Tile Types] --> P4[Terraces] --> P5[Shores] --> P6[Smoothing] --> P7[Fertility] --> P8[Slopes] --> P9[Ramps]
+        P1[Terrain] --> P2[Biomes] --> P2b[Elevation] --> P2c[Lakes and Rivers] --> P3[Tile Types] --> P4[Terraces] --> P5[Shores] --> P6[Smoothing] --> P7[Fertility] --> P8[Slopes] --> P9[Ramps]
     end
 
     subgraph Runtime["World (runtime)"]
@@ -86,7 +86,8 @@ One per world (editor, PIE, game). Owns the live grid.
 |---|---|---|
 | Terrain | seed | height/moisture/detail noise fields; water tiles; the water level for later passes |
 | Biomes | noise fields, biome set | biome, moisture |
-| Elevation | height and moisture noise, water level, biome set | height levels, scaled and capped per biome (see D16) |
+| Elevation | height and moisture noise, water level, biome set | height levels on top of a base level, scaled and capped per biome; water one level below the base (see D16, D17) |
+| Lakes and Rivers | height noise, height levels | lakes in basins and rivers running downhill, one level below their banks (see D17) |
 | Tile Types | biome rule sets | tile type |
 | Terraces | height levels | height levels (no neighbours more than one level apart, no terrace smaller than `MinTerraceSize`) |
 | Shores | tile types, biome set | shore tile type next to water |
@@ -274,6 +275,18 @@ Each entry: what it was, what it is now, why, and what it costs.
 - **Cost:** the Elevation pass reads the biome blend again instead of storing it; cheap at this map size. The global `MaxLevel` moved from Terrain to Elevation, so a value saved on a level's Terrain pass is dropped. Measured with the terrain report (128 × 128, 12 seeds, `LevelStep` 0.15): 92% of land flat, 37% raised, about 36 non-overlapping 12 × 12 farm plots per map (fewest 20), flat tiles on average 4.7 tiles from a terrace edge (terraces roughly 9 wide), 23 ramp tiles. 0.10 gives more, narrower terraces (63% raised, 23 plots); 0.20 flatter maps (29% raised, 44 plots). 0.15 stays.
 - **Small terraces:** the numbers showed about 130 flat areas per map, many of them a few tiles: specks of a level that break up the land and each need a ramp. The Terraces pass now merges every terrace smaller than `MinTerraceSize` (12 tiles) into the level most of its surroundings have (`TileAlgorithms::MergeSmallAreas`), alternating with the step clamp until both are settled; pieces that only water surrounds stay. Result at 0.15: 99 flat areas, 7.5 ramp tiles instead of 23, 38 farm plots (fewest 24 instead of 20), 875 cliff edges instead of 934. The full-pipeline spec checks that no terrace below the minimum is left.
 - **Open:** "Farm sites" (flat areas that hold a plot) is too coarse: one big plain counts once. Roadmap step 4 replaces it with scored sites.
+
+### D17. Lakes and rivers follow the land, below a base level
+
+- **Before:** water was every tile whose height noise was under one threshold, all on level 0, flush with its shore. No rivers.
+- **After:**
+  - The ground has a base level (`UElevationPass::BaseLevel`, 2): land starts there, and water sits one level below, so banks are a small cliff or slope down to the water and there is room below the ground for valleys (Trello #29).
+  - A Lakes and Rivers pass runs after Elevation. A priority flood over the height noise, from the map edge and the existing water, gives every tile the lowest height at which water on it could run off and where it runs to. Groups of tiles filled at least `MinLakeDepth` (0.02) above the ground and at least `MinLakeSize` (16) big become lakes, at any height, one level below their lowest bank.
+  - Rivers start on high land away from the map edge (picked by the seed, `MinSourceSpacing` apart), follow the run-off directions to a lake, the sea or the map edge, and sit one level below their banks, never rising downstream and never above a bank. They widen by one tile every `WidenEvery` tiles and where rivers join, up to `MaxRiverWidth`. Where a river drops faster than the land, the Terraces pass cuts the banks into stepped valley walls.
+  - `ATileWorldGenerator` logs a pass it adds to a saved level with "Save the level to keep it": the fix-up runs during loading, so it does not mark the level as changed by itself.
+- **Measured** (terrain report, 12 seeds): about 424 lake tiles and 176 river tiles per 128 × 128 map; farm plots 31 on average (fewest 21) instead of 38, because water takes land. Shallower lake thresholds (0.01, 0.005) mostly add marshy fringes, so 0.02 stays.
+- **Why:** water that follows the shape of the land is what makes a map readable and gives farm sites something to be near. Depth below the banks is the look of the reference style and the start of valleys.
+- **Cost:** rivers may cut land in two; crossings are left to bridges (the player decides when). Water tiles are drawn with collision like land, so a character that drops down a bank can walk on water until water gets its own collision. Rivers are carved on the generation grid, so their banks follow tile steps.
 ---
 
 ## 5. What I deliberately did not change
@@ -301,7 +314,7 @@ When you open the project after these commits:
 Nothing below was possible without an Unreal toolchain.
 
 1. Build `ChillFarmGameEditor` (Development Editor). Fix anything the compiler finds; the most likely spots are engine API signatures in `TileVisualGrid.cpp`, `ViewportMouseClickNotifier.cpp` and `STileInspectorWindow.cpp`.
-2. Session Frontend → Automation → run `ChillFarmGame.TileWorld` (158 specs, see section 2.6; the terrain report runs separately).
+2. Session Frontend → Automation → run `ChillFarmGame.TileWorld` (165 specs, see section 2.6; the terrain report runs separately).
 3. Open the test map: the world appears without pressing Generate.
 4. Click a tile: yellow box on that tile, inspector shows type/biome/fertility/moisture and readable history.
 5. Click inside the Tile Inspector tab while it overlaps the viewport: nothing gets selected.
@@ -316,7 +329,7 @@ Ordered so each step is visible and testable on its own, and nothing already wor
 
 1. **Cliffs and slopes.** First versions done (D12, D14): stretched walls per edge, corner-based slopes mixed in by noise. Missing: outer and inner corner meshes (D14 says what they must look like). Still to evaluate for the final look: Evaluate the dual grid: the visual grid is offset by half a tile and each visual tile reads its four corners (marching squares), which needs about six shapes instead of the current 8-neighbour piece set and handles both surface transitions and cliffs. The neighbour mask must also treat a same-type neighbour at another level as different.
 2. **Ramps and reachability.** Done (D13, D14): slopes join much of the land, and the Ramps pass joins every remaining terrace to the rest of its island. Once roads exist, start the flood fill from the road instead of the largest area.
-3. **Water and valleys.** Rivers carved downhill as a pass; water level per lake instead of a global threshold. Together with it, valleys below the ground: `Height` stays unsigned, but the ground gets a base level (plains at, say, level 2 instead of 0), so valleys, canyons, river beds and sunken lakes can go below it. To the player those are negative levels; the data counts from the deepest point.
+3. **Water and valleys.** First version done (D17): base level 2, lakes in basins at any height, rivers downhill one level below their banks. Still to do: valleys and canyons as their own feature (carved below the base, not only around rivers), bridges, and water that cannot be walked on.
 4. **Roads and farm sites.** A* road pass over a cost field (slope, water, biome). Derived per-tile fields with breadth-first distance transforms: distance to water, to road, size of the flat area. A scoring pass that rates farm sites and a validation pass that guarantees enough good ones. The inspector overlay for these fields is the prototype of the player's site selection screen.
 5. **Gameplay edits.** Tilling and watering are in (`TileFarming`, right mouse, `ETileType::Farmland`, `ETileFlags::Watered`); building is next. All through `UTileWorldSubsystem::MutateTile` with `ETileMutationSource::Gameplay`. Keep crops, buildings and items out of `FTileData`: they are sparse objects keyed by tile coordinate in their own systems, which listen to tile changes.
 6. **Saving.** Seed + generation settings + the list of gameplay changes (or a diff of the grid against a fresh generation). Small, and old saves keep working when unrelated generation code changes only if generation stays deterministic, which the determinism test guards.

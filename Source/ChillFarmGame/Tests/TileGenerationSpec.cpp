@@ -22,6 +22,7 @@ namespace TileGenerationSpecPrivate
 		UTerrainNoisePass* Terrain = nullptr;
 		UBiomeAssignmentPass* Biomes = nullptr;
 		UElevationPass* Elevation = nullptr;
+		ULakesAndRiversPass* Water = nullptr;
 		UTileTypePass* TileTypes = nullptr;
 		ULevelConstraintPass* Terraces = nullptr;
 		UShorePass* Shores = nullptr;
@@ -32,7 +33,7 @@ namespace TileGenerationSpecPrivate
 
 		TArray<const UTileGenerationPass*> List() const
 		{
-			return { Terrain, Biomes, Elevation, TileTypes, Terraces, Shores, Smoothing, Fertility, Slopes, Ramps };
+			return { Terrain, Biomes, Elevation, Water, TileTypes, Terraces, Shores, Smoothing, Fertility, Slopes, Ramps };
 		}
 	};
 
@@ -45,6 +46,7 @@ namespace TileGenerationSpecPrivate
 		Passes.Biomes = NewObject<UBiomeAssignmentPass>();
 		Passes.Elevation = NewObject<UElevationPass>();
 		Passes.Elevation->MaxLevel = InMaxLevel;
+		Passes.Water = NewObject<ULakesAndRiversPass>();
 		Passes.TileTypes = NewObject<UTileTypePass>();
 		Passes.Terraces = NewObject<ULevelConstraintPass>();
 		Passes.Shores = NewObject<UShorePass>();
@@ -167,7 +169,7 @@ void FTileGenerationSpec::Define()
 
 			// A pass that finds nothing to do makes no changes, so only the order is checked:
 			// steps must appear in pipeline order, each in one uninterrupted block.
-			const TArray<FName> Pipeline = { TEXT("Terrain"), TEXT("Biomes"), TEXT("Elevation"), TEXT("Tile Types"), TEXT("Terraces"), TEXT("Shores"), TEXT("Smoothing"), TEXT("Fertility"), TEXT("Slopes"), TEXT("Ramps") };
+			const TArray<FName> Pipeline = { TEXT("Terrain"), TEXT("Biomes"), TEXT("Elevation"), TEXT("Water"), TEXT("Tile Types"), TEXT("Terraces"), TEXT("Shores"), TEXT("Smoothing"), TEXT("Fertility"), TEXT("Slopes"), TEXT("Ramps") };
 
 			int32 LastStepIndex = -1;
 			bool bInOrder = true;
@@ -349,8 +351,8 @@ void FTileGenerationSpec::Define()
 			Elevation->Execute(Context);
 
 			bool bFlat = true;
-			for (const FTileData& Tile : Grid.GetTiles()) bFlat &= Tile.Height == 0;
-			TestTrue(TEXT("All tiles on level 0"), bFlat);
+			for (const FTileData& Tile : Grid.GetTiles()) bFlat &= Tile.Height == (Tile.IsWater() ? Elevation->BaseLevel - 1 : Elevation->BaseLevel);
+			TestTrue(TEXT("Land on the base level, water one below"), bFlat);
 		});
 
 		It("assigns levels from height, water level and level step without biomes", [this]()
@@ -359,6 +361,7 @@ void FTileGenerationSpec::Define()
 			UElevationPass* Elevation = NewObject<UElevationPass>();
 			Elevation->MaxLevel = 3;
 			Elevation->LevelStep = 0.05f;
+			Elevation->BaseLevel = 0;
 
 			FTileGrid Grid(MakeLayout(96, 96));
 			FTileGenerationContext Context(Grid, 11);
@@ -400,6 +403,7 @@ void FTileGenerationSpec::Define()
 			UElevationPass* Elevation = NewObject<UElevationPass>();
 			Elevation->MaxLevel = InMaxLevel;
 			Elevation->LevelStep = 0.1f;
+			Elevation->BaseLevel = 0;
 			Elevation->Execute(Context);
 			return TArray<FTileData>(Grid.GetTiles());
 		};
@@ -432,11 +436,29 @@ void FTileGenerationSpec::Define()
 			FTileGenerationContext Context(Grid, 3);
 			Context.Biomes = Data.Biomes;
 			NewObject<UTerrainNoisePass>()->Execute(Context);
-			NewObject<UElevationPass>()->Execute(Context);
+			UElevationPass* Elevation = NewObject<UElevationPass>();
+			Elevation->BaseLevel = 0;
+			Elevation->Execute(Context);
 
 			bool bFlat = true;
 			for (const FTileData& Tile : Grid.GetTiles()) bFlat &= Tile.Height == 0;
 			TestTrue(TEXT("All tiles on level 0"), bFlat);
+		});
+
+		It("puts land on the base level and water one level below it", [this]()
+		{
+			FTileGrid Grid = MakeGrid({ TEXT("GW") });
+			FTileGenerationContext Context(Grid, 1);
+			Context.WaterLevel = 0.3f;
+			Context.HeightField = { 0.35f, 0.1f };
+			Context.MoistureField = { 0.5f, 0.5f };
+
+			UElevationPass* Elevation = NewObject<UElevationPass>();
+			Elevation->BaseLevel = 2;
+			Elevation->Execute(Context);
+
+			TestEq(*this, TEXT("Land"), Grid.GetTile(FIntPoint(0, 0)).Height, static_cast<uint8>(2));
+			TestEq(*this, TEXT("Water"), Grid.GetTile(FIntPoint(1, 0)).Height, static_cast<uint8>(1));
 		});
 
 
@@ -499,6 +521,161 @@ void FTileGenerationSpec::Define()
 
 			TestEq(*this, TEXT("Detail below the chance -> second biome"), Grid.GetTile(FIntPoint(0, 0)).Biome, EBiomeType::Mountains);
 			TestEq(*this, TEXT("Detail above the chance -> first biome"), Grid.GetTile(FIntPoint(1, 0)).Biome, EBiomeType::Plains);
+		});
+	});
+
+	Describe("ULakesAndRiversPass", [this]()
+	{
+		// A 9 x 9 map on level 3 whose height noise has a basin in the middle 5 x 5.
+		const auto MakeBasin = [](float InInnerHeight, int32 InInnerSize)
+		{
+			FTileGrid Grid = MakeGrid({ TEXT("GGGGGGGGG"), TEXT("GGGGGGGGG"), TEXT("GGGGGGGGG"), TEXT("GGGGGGGGG"), TEXT("GGGGGGGGG"), TEXT("GGGGGGGGG"), TEXT("GGGGGGGGG"), TEXT("GGGGGGGGG"), TEXT("GGGGGGGGG") });
+			SetHeights(Grid, { TEXT("333333333"), TEXT("333333333"), TEXT("333333333"), TEXT("333333333"), TEXT("333333333"), TEXT("333333333"), TEXT("333333333"), TEXT("333333333"), TEXT("333333333") });
+			TArray<float> Heights;
+			Heights.Init(0.6f, 81);
+			const int32 First = (9 - InInnerSize) / 2;
+			for (int32 Y = First; Y < First + InInnerSize; ++Y)
+			{
+				for (int32 X = First; X < First + InInnerSize; ++X) Heights[X + Y * 9] = InInnerHeight;
+			}
+			return TPair<FTileGrid, TArray<float>>(MoveTemp(Grid), MoveTemp(Heights));
+		};
+		const auto RunLakes = [](FTileGrid& Grid, const TArray<float>& Heights, int32 InMinLakeSize)
+		{
+			FTileGenerationContext Context(Grid, 1);
+			Context.HeightField = Heights;
+			ULakesAndRiversPass* Pass = NewObject<ULakesAndRiversPass>();
+			Pass->RiverCount = 0;
+			Pass->MinLakeSize = InMinLakeSize;
+			Pass->Execute(Context);
+		};
+
+		It("fills a basin with a lake one level below its banks", [this, MakeBasin, RunLakes]()
+		{
+			auto [Grid, Heights] = MakeBasin(0.4f, 5);
+			RunLakes(Grid, Heights, 4);
+
+			const FTileData& Centre = Grid.GetTile(FIntPoint(4, 4));
+			TestTrue(TEXT("Centre is water"), Centre.IsWater());
+			TestEq(*this, TEXT("Lake level"), Centre.Height, static_cast<uint8>(2));
+			TestEq(*this, TEXT("Lake biome"), Centre.Biome, EBiomeType::Water);
+			TestTrue(TEXT("Corner of the basin is water"), Grid.GetTile(FIntPoint(2, 2)).IsWater());
+			TestFalse(TEXT("The rim stays land"), Grid.GetTile(FIntPoint(1, 4)).IsWater());
+		});
+
+		It("keeps basins smaller than MinLakeSize dry", [this, MakeBasin, RunLakes]()
+		{
+			auto [Grid, Heights] = MakeBasin(0.4f, 1);
+			RunLakes(Grid, Heights, 4);
+			for (const FTileData& Tile : Grid.GetTiles()) TestFalse(TEXT("No lake"), Tile.IsWater());
+		});
+
+		It("keeps a dip that drains to the map edge dry", [this, MakeBasin, RunLakes]()
+		{
+			auto [Grid, Heights] = MakeBasin(0.4f, 5);
+			// Open the basin to the west edge: a channel as low as the basin.
+			for (int32 X = 0; X < 2; ++X) Heights[X + 4 * 9] = 0.4f;
+			RunLakes(Grid, Heights, 4);
+			for (const FTileData& Tile : Grid.GetTiles()) TestFalse(TEXT("No lake"), Tile.IsWater());
+		});
+
+		// A long slope falling to the east, a valley along the middle row; land levels fall too.
+		const auto RunRiver = [](int32 InWidenEvery)
+		{
+			constexpr int32 Width = 40;
+			constexpr int32 Height = 7;
+			TArray<FString> Rows;
+			TArray<FString> Levels;
+			for (int32 Y = 0; Y < Height; ++Y)
+			{
+				Rows.Add(FString::ChrN(Width, TEXT('G')));
+				FString Row;
+				for (int32 X = 0; X < Width; ++X) Row.AppendChar(TEXT('0') + 5 - X / 10);
+				Levels.Add(Row);
+			}
+			FTileGrid Grid(MakeLayout(Width, Height));
+			for (int32 Y = 0; Y < Height; ++Y)
+			{
+				for (int32 X = 0; X < Width; ++X)
+				{
+					Grid.ApplyMutation(FIntPoint(X, Y), FTileMutation().SetType(ETileType::Grass).SetBiome(EBiomeType::Plains).SetHeight(static_cast<uint8>(Levels[Y][X] - TEXT('0'))));
+				}
+			}
+
+			FTileGenerationContext Context(Grid, 3);
+			Context.HeightField.SetNum(Width * Height);
+			for (int32 Y = 0; Y < Height; ++Y)
+			{
+				for (int32 X = 0; X < Width; ++X)
+				{
+					Context.HeightField[X + Y * Width] = 0.9f - X * 0.015f + FMath::Abs(Y - Height / 2) * 0.01f;
+				}
+			}
+
+			ULakesAndRiversPass* Pass = NewObject<ULakesAndRiversPass>();
+			Pass->RiverCount = 1;
+			Pass->SourceMinHeight = 0.87f;
+			Pass->MinRiverLength = 5;
+			Pass->WidenEvery = InWidenEvery;
+			Pass->Execute(Context);
+			return Grid;
+		};
+
+		It("runs a river downhill to the map edge, never rising and never above its banks", [this, RunRiver]()
+		{
+			const FTileGrid Grid = RunRiver(1000);
+			const FTileGridLayout& Layout = Grid.GetLayout();
+
+			int32 WaterTiles = 0;
+			int32 AboveBank = 0;
+			bool bReachesEdge = false;
+			int32 Previous = MAX_int32;
+			bool bNeverRises = true;
+			for (int32 X = 0; X < Layout.Size.X; ++X)
+			{
+				int32 ColumnLevel = MAX_int32;
+				for (int32 Y = 0; Y < Layout.Size.Y; ++Y)
+				{
+					const FIntPoint Tile(X, Y);
+					const FTileData& Data = Grid.GetTile(Tile);
+					if (!Data.IsWater()) continue;
+					++WaterTiles;
+					ColumnLevel = FMath::Min<int32>(ColumnLevel, Data.Height);
+					if (X == Layout.Size.X - 1) bReachesEdge = true;
+					for (const FIntPoint& Offset : FTileGrid::GetCardinalOffsets())
+					{
+						const FTileData* Neighbor = Grid.FindTile(Tile + Offset);
+						if (Neighbor && !Neighbor->IsWater() && Neighbor->Height < Data.Height) ++AboveBank;
+					}
+				}
+				if (ColumnLevel == MAX_int32) continue;
+				bNeverRises &= ColumnLevel <= Previous;
+				Previous = ColumnLevel;
+			}
+
+			TestTrue(TEXT("A river"), WaterTiles >= 30);
+			TestTrue(TEXT("Reaches the east edge"), bReachesEdge);
+			TestTrue(TEXT("Never rises downstream"), bNeverRises);
+			TestEq(*this, TEXT("Water above a bank"), AboveBank, 0);
+		});
+
+		It("widens a river downstream", [this, RunRiver]()
+		{
+			const FTileGrid Narrow = RunRiver(1000);
+			const FTileGrid Wide = RunRiver(8);
+
+			const auto CountWater = [](const FTileGrid& Grid)
+			{
+				int32 Count = 0;
+				for (const FTileData& Tile : Grid.GetTiles()) Count += Tile.IsWater() ? 1 : 0;
+				return Count;
+			};
+			TestTrue(TEXT("More water when it widens"), CountWater(Wide) > CountWater(Narrow) + 10);
+
+			// The last column holds the widest part.
+			int32 LastColumn = 0;
+			for (int32 Y = 0; Y < Wide.GetSize().Y; ++Y) LastColumn += Wide.GetTile(FIntPoint(Wide.GetSize().X - 1, Y)).IsWater() ? 1 : 0;
+			TestTrue(TEXT("Three wide at the mouth"), LastColumn >= 3);
 		});
 	});
 
@@ -1015,7 +1192,7 @@ void FTileGenerationSpec::Define()
 			const FTileGrid Grid = GenerateWorld(7, FIntPoint(96, 96), 4);
 			const FTileGridLayout& Layout = Grid.GetLayout();
 
-			int32 NotGenerated = 0, LandWithoutBiome = 0, WaterAboveZero = 0, SteepSteps = 0, BareShores = 0, BadFertility = 0;
+			int32 NotGenerated = 0, LandWithoutBiome = 0, WaterAboveLand = 0, SteepSteps = 0, BareShores = 0, BadFertility = 0;
 			int32 WaterTiles = 0, FertileBarrenTiles = 0;
 			TSet<uint8> GrassFertility;
 			for (int32 Index = 0; Index < Layout.NumTiles(); ++Index)
@@ -1031,7 +1208,11 @@ void FTileGenerationSpec::Define()
 				if (Data.IsWater())
 				{
 					++WaterTiles;
-					if (Data.Height != 0) ++WaterAboveZero;
+					for (const FIntPoint& Offset : FTileGrid::GetCardinalOffsets())
+					{
+						const FTileData* Neighbor = Grid.FindTile(Tile + Offset);
+						if (Neighbor && !Neighbor->IsWater() && Neighbor->Height < Data.Height) ++WaterAboveLand;
+					}
 				}
 				else
 				{
@@ -1048,7 +1229,7 @@ void FTileGenerationSpec::Define()
 
 			TestEq(*this, TEXT("Tiles not generated"), NotGenerated, 0);
 			TestEq(*this, TEXT("Land tiles without a land biome"), LandWithoutBiome, 0);
-			TestEq(*this, TEXT("Water tiles above level 0"), WaterAboveZero, 0);
+			TestEq(*this, TEXT("Water above the land next to it"), WaterAboveLand, 0);
 			TestEq(*this, TEXT("Neighbours more than one level apart"), SteepSteps, 0);
 			TestEq(*this, TEXT("Land next to water that is not sand"), BareShores, 0);
 			TestEq(*this, TEXT("Fertility or moisture above 100"), BadFertility, 0);
@@ -1056,6 +1237,25 @@ void FTileGenerationSpec::Define()
 			// Every tile used to get its biome's base value. Moisture must now make grass differ.
 			TestTrue(TEXT("Grass fertility varies"), GrassFertility.Num() > 1);
 			TestTrue(TEXT("Some water and some land"), WaterTiles > 0 && WaterTiles < Layout.NumTiles());
+		});
+
+		It("adds lakes and rivers on a full map", [this]()
+		{
+			for (const int32 Seed : { 3, 7, 11 })
+			{
+				TArray<FTileChange> Changes;
+				GenerateWorld(Seed, FIntPoint(96, 96), 4, &Changes);
+
+				int32 Lakes = 0, Rivers = 0;
+				for (const FTileChange& Change : Changes)
+				{
+					if (Change.Context.Step != FName(TEXT("Water"))) continue;
+					Lakes += Change.Context.Reason == FName(TEXT("Fills a basin")) ? 1 : 0;
+					Rivers += Change.Context.Reason == FName(TEXT("River")) ? 1 : 0;
+				}
+				TestTrue(FString::Printf(TEXT("Seed %d: river tiles"), Seed), Rivers > 0);
+				AddInfo(FString::Printf(TEXT("Seed %d: %d lake tiles, %d river tiles"), Seed, Lakes, Rivers));
+			}
 		});
 
 		It("lets every piece of land be walked to unless water cuts it off", [this]()

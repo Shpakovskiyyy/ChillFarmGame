@@ -18,7 +18,7 @@ struct FTileTerrainStats
 	// Land that is flat.
 	int32 FlatTiles = 0;
 
-	// Land above level 0.
+	// Land above the lowest land level on the map (the base ground).
 	int32 RaisedTiles = 0;
 
 	// Pairs of neighbouring land tiles a character cannot step between (cliffs, see TileReachability).

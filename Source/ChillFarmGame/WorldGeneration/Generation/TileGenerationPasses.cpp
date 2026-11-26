@@ -96,7 +96,12 @@ void UElevationPass::Execute(FTileGenerationContext& Context) const
 	for (int32 Index = 0; Index < Layout.NumTiles(); ++Index)
 	{
 		const FIntPoint Tile = Layout.ToTile(Index);
-		if (Context.Grid.GetTile(Tile).IsWater()) continue;
+		if (Context.Grid.GetTile(Tile).IsWater())
+		{
+			// The low lakes from the height noise: one level below the ground.
+			Context.Mutate(Tile, FTileMutation().SetHeight(static_cast<uint8>(FMath::Max(BaseLevel - 1, 0))), TEXT("Water below the ground"));
+			continue;
+		}
 
 		float Scale = 1.f;
 		float BiomeCap = static_cast<float>(MaxLevel);
@@ -116,7 +121,238 @@ void UElevationPass::Execute(FTileGenerationContext& Context) const
 		const int32 Cap = FMath::Min(MaxLevel, FMath::RoundToInt32(BiomeCap));
 		const float AboveWater = FMath::Max(Context.HeightField[Index] - Context.WaterLevel, 0.f);
 		const int32 Level = FMath::Clamp(FMath::FloorToInt32(AboveWater * Scale / LevelStep), 0, FMath::Max(Cap, 0));
-		Context.Mutate(Tile, FTileMutation().SetHeight(static_cast<uint8>(Level)), TEXT("Elevation from height noise and biome"));
+		Context.Mutate(Tile, FTileMutation().SetHeight(static_cast<uint8>(BaseLevel + Level)), TEXT("Elevation from height noise and biome"));
+	}
+}
+
+
+/* Lakes and rivers */
+
+void ULakesAndRiversPass::Execute(FTileGenerationContext& Context) const
+{
+	const FTileGrid& Grid = Context.Grid;
+	const FTileGridLayout& Layout = Context.GetLayout();
+	const int32 NumTiles = Layout.NumTiles();
+	if (NumTiles == 0 || Context.HeightField.Num() != NumTiles) return;
+
+	// Priority flood: from the map edge and the existing water inwards, lowest first. Filled[i] is the
+	// lowest height at which water on tile i could run off; Downstream[i] is where it runs to (none for
+	// the starting tiles). A tiny rise per step keeps water running across flat filled ground.
+	constexpr float FlatRise = 1e-5f;
+	TArray<float> Filled;
+	Filled.Init(MAX_flt, NumTiles);
+	TArray<int32> Downstream;
+	Downstream.Init(INDEX_NONE, NumTiles);
+
+	struct FFloodNode
+	{
+		float Height;
+		int32 Index;
+		bool operator<(const FFloodNode& Other) const { return Height < Other.Height || (Height == Other.Height && Index < Other.Index); }
+	};
+	TArray<FFloodNode> Open;
+	for (int32 Index = 0; Index < NumTiles; ++Index)
+	{
+		const FIntPoint Tile = Layout.ToTile(Index);
+		const bool bEdge = Tile.X == 0 || Tile.Y == 0 || Tile.X == Layout.Size.X - 1 || Tile.Y == Layout.Size.Y - 1;
+		if (!bEdge && !Grid.GetTile(Tile).IsWater()) continue;
+		Filled[Index] = Context.HeightField[Index];
+		Open.HeapPush({ Filled[Index], Index });
+	}
+
+	TArray<bool> Done;
+	Done.Init(false, NumTiles);
+	while (!Open.IsEmpty())
+	{
+		FFloodNode Node;
+		Open.HeapPop(Node, EAllowShrinking::No);
+		if (Done[Node.Index]) continue;
+		Done[Node.Index] = true;
+
+		const FIntPoint Tile = Layout.ToTile(Node.Index);
+		for (const FIntPoint& Offset : FTileGrid::GetCardinalOffsets())
+		{
+			const FIntPoint Next = Tile + Offset;
+			if (!Layout.Contains(Next)) continue;
+			const int32 NextIndex = Layout.ToIndex(Next);
+			if (Done[NextIndex]) continue;
+
+			const float Height = FMath::Max(Context.HeightField[NextIndex], Filled[Node.Index] + FlatRise);
+			if (Height >= Filled[NextIndex]) continue;
+			Filled[NextIndex] = Height;
+			Downstream[NextIndex] = Node.Index;
+			Open.HeapPush({ Height, NextIndex });
+		}
+	}
+
+	// Levels of the land as it is before any new water, for banks.
+	TArray<int32> LandLevel;
+	LandLevel.SetNumUninitialized(NumTiles);
+	for (int32 Index = 0; Index < NumTiles; ++Index) LandLevel[Index] = Grid.GetTiles()[Index].Height;
+
+	TArray<bool> IsWater;
+	IsWater.SetNumUninitialized(NumTiles);
+	for (int32 Index = 0; Index < NumTiles; ++Index) IsWater[Index] = Grid.GetTiles()[Index].IsWater();
+
+	TMap<int32, uint8> NewWater;
+	TMap<int32, FName> NewWaterReason;
+	const auto LowestLandAround = [&](int32 Index)
+	{
+		int32 Lowest = MAX_int32;
+		const FIntPoint Tile = Layout.ToTile(Index);
+		for (const FIntPoint& Offset : FTileGrid::GetCardinalOffsets())
+		{
+			const FIntPoint Next = Tile + Offset;
+			if (!Layout.Contains(Next)) continue;
+			const int32 NextIndex = Layout.ToIndex(Next);
+			if (!IsWater[NextIndex] && !NewWater.Contains(NextIndex)) Lowest = FMath::Min(Lowest, LandLevel[NextIndex]);
+		}
+		return Lowest;
+	};
+
+	// Lakes: groups of tiles the flood filled deep enough.
+	TArray<bool> Visited;
+	Visited.Init(false, NumTiles);
+	TArray<int32> Group;
+	for (int32 Start = 0; Start < NumTiles; ++Start)
+	{
+		if (Visited[Start] || IsWater[Start] || Filled[Start] - Context.HeightField[Start] < MinLakeDepth) continue;
+
+		Group.Reset();
+		Group.Add(Start);
+		Visited[Start] = true;
+		for (int32 Head = 0; Head < Group.Num(); ++Head)
+		{
+			const FIntPoint Tile = Layout.ToTile(Group[Head]);
+			for (const FIntPoint& Offset : FTileGrid::GetCardinalOffsets())
+			{
+				const FIntPoint Next = Tile + Offset;
+				if (!Layout.Contains(Next)) continue;
+				const int32 NextIndex = Layout.ToIndex(Next);
+				if (Visited[NextIndex] || IsWater[NextIndex] || Filled[NextIndex] - Context.HeightField[NextIndex] < MinLakeDepth) continue;
+				Visited[NextIndex] = true;
+				Group.Add(NextIndex);
+			}
+		}
+		if (Group.Num() < MinLakeSize) continue;
+
+		// One level below the lowest bank, so the surface is flat and never above the land around it.
+		int32 Bank = MAX_int32;
+		for (const int32 Index : Group) Bank = FMath::Min(Bank, LowestLandAround(Index));
+		if (Bank == MAX_int32) Bank = LandLevel[Group[0]];
+		const uint8 Surface = static_cast<uint8>(FMath::Max(Bank - 1, 0));
+		for (const int32 Index : Group)
+		{
+			NewWater.Add(Index, Surface);
+			NewWaterReason.Add(Index, TEXT("Fills a basin"));
+		}
+	}
+	for (const TPair<int32, uint8>& Entry : NewWater) IsWater[Entry.Key] = true;
+
+	// River sources: high land, in an order the seed picks, apart from each other. Not on the map edge,
+	// where water runs off the map at once.
+	FRandomStream Stream = Context.MakeStream(0x21FE4A11u);
+	TArray<int32> Candidates;
+	for (int32 Index = 0; Index < NumTiles; ++Index)
+	{
+		const FIntPoint Tile = Layout.ToTile(Index);
+		const bool bEdge = Tile.X == 0 || Tile.Y == 0 || Tile.X == Layout.Size.X - 1 || Tile.Y == Layout.Size.Y - 1;
+		if (!bEdge && !IsWater[Index] && Context.HeightField[Index] >= SourceMinHeight) Candidates.Add(Index);
+	}
+	for (int32 Index = Candidates.Num() - 1; Index > 0; --Index) Candidates.Swap(Index, Stream.RandRange(0, Index));
+
+	TArray<int32> Sources;
+	for (const int32 Candidate : Candidates)
+	{
+		if (Sources.Num() >= RiverCount) break;
+		const FIntPoint Tile = Layout.ToTile(Candidate);
+		const bool bFarEnough = !Sources.ContainsByPredicate([&](int32 Source)
+		{
+			const FIntPoint Other = Layout.ToTile(Source);
+			return FMath::Max(FMath::Abs(Other.X - Tile.X), FMath::Abs(Other.Y - Tile.Y)) < MinSourceSpacing;
+		});
+		if (bFarEnough) Sources.Add(Candidate);
+	}
+
+	// Follow every river down to water. Flow counts the rivers through a tile (2 or more after a join),
+	// Length the distance from the source, so the river can widen.
+	TArray<int32> Flow;
+	Flow.Init(0, NumTiles);
+	TArray<int32> Length;
+	Length.Init(0, NumTiles);
+	TArray<int32> Surface;
+	Surface.Init(MAX_int32, NumTiles);
+	TArray<TArray<int32>> Rivers;
+	for (const int32 Source : Sources)
+	{
+		TArray<int32> Path;
+		int32 Current = Source;
+		int32 OwnLength = 0;
+		while (Current != INDEX_NONE && !IsWater[Current])
+		{
+			Path.Add(Current);
+			if (Flow[Current] == 0) ++OwnLength;
+			Current = Downstream[Current];
+		}
+		if (OwnLength < MinRiverLength) continue;
+
+		int32 Level = MAX_int32;
+		for (int32 Step = 0; Step < Path.Num(); ++Step)
+		{
+			const int32 Index = Path[Step];
+			// Never rises downstream, one level below the ground here, never above a bank.
+			Level = FMath::Min3(Level, LandLevel[Index] - 1, LowestLandAround(Index));
+			Level = FMath::Max(Level, 0);
+			Surface[Index] = FMath::Min(Surface[Index], Level);
+			Level = Surface[Index];
+			++Flow[Index];
+			Length[Index] = FMath::Max(Length[Index], Step);
+		}
+		Rivers.Add(MoveTemp(Path));
+	}
+
+	for (const TArray<int32>& Path : Rivers)
+	{
+		for (int32 Step = 0; Step < Path.Num(); ++Step)
+		{
+			const int32 Index = Path[Step];
+			const uint8 Level = static_cast<uint8>(Surface[Index]);
+			if (!NewWater.Contains(Index))
+			{
+				NewWater.Add(Index, Level);
+				NewWaterReason.Add(Index, TEXT("River"));
+			}
+
+			const int32 Width = FMath::Min(MaxRiverWidth, 1 + Length[Index] / WidenEvery + (Flow[Index] > 1 ? 1 : 0));
+			if (Width <= 1) continue;
+
+			// Widen across the direction of flow: the right bank first, then the left.
+			const FIntPoint Tile = Layout.ToTile(Index);
+			const int32 NextIndex = Step + 1 < Path.Num() ? Path[Step + 1] : Downstream[Index];
+			const FIntPoint Direction = NextIndex != INDEX_NONE ? Layout.ToTile(NextIndex) - Tile : FIntPoint(1, 0);
+			const FIntPoint Right(-Direction.Y, Direction.X);
+			for (int32 Extra = 1; Extra < Width; ++Extra)
+			{
+				const int32 Side = (Extra + 1) / 2;
+				const FIntPoint Bank = Tile + (Extra % 2 == 1 ? Right * Side : FIntPoint::ZeroValue - Right * Side);
+				if (!Layout.Contains(Bank)) continue;
+				const int32 BankIndex = Layout.ToIndex(Bank);
+				if (IsWater[BankIndex] || NewWater.Contains(BankIndex)) continue;
+				NewWater.Add(BankIndex, static_cast<uint8>(FMath::Max(FMath::Min(static_cast<int32>(Level), LandLevel[BankIndex] - 1), 0)));
+				NewWaterReason.Add(BankIndex, TEXT("River"));
+			}
+		}
+	}
+
+	// Apply in grid order, so the history reads the same for the same seed.
+	TArray<int32> Changed;
+	NewWater.GetKeys(Changed);
+	Changed.Sort();
+	for (const int32 Index : Changed)
+	{
+		Context.Mutate(Layout.ToTile(Index),
+			FTileMutation().SetType(ETileType::Water).SetBiome(EBiomeType::Water).SetMoisture(100).SetHeight(NewWater[Index]),
+			NewWaterReason[Index]);
 	}
 }
 

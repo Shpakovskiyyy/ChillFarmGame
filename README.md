@@ -15,7 +15,7 @@ All active development is happening on the `TerrainGenerationMVP` branch. This b
 ## What Exists So Far
 
 ### Procedural World Generation
-`ATileWorldGenerator` builds the tile map from a seed by running a list of generation passes in order: terrain noise (height, moisture, water), biomes, elevation (levels per biome: plains stay low, mountains rise), tile types, terraces, shores, smoothing, fertility, slopes and ramps. Passes work on a plain `FTileGrid` without touching the world, so the same seed always gives the same map and the pipeline can be tested without a level.
+`ATileWorldGenerator` builds the tile map from a seed by running a list of generation passes in order: terrain noise (height, moisture, water), biomes, elevation (levels per biome on top of a base level: plains stay low, mountains rise), lakes and rivers (lakes in basins at any height, rivers running downhill, both one level below their banks), tile types, terraces, shores, smoothing, fertility, slopes and ramps. Passes work on a plain `FTileGrid` without touching the world, so the same seed always gives the same map and the pipeline can be tested without a level.
 
 The map is drawn by `ATileVisualGrid` with Hierarchical Instanced Static Mesh components, one per autotile piece per chunk. Where land meets higher land, a Slopes pass turns some of the edges into slopes (decided by a noise field, so some hills are soft and some have walls); the rest get cliff sides, stretched from any mesh set on the visual data. A Ramps pass then joins every terrace still cut off to the rest of its island, so all land can be walked to. The drawn map is not saved with the level; it is regenerated from the seed when the level opens.
 
