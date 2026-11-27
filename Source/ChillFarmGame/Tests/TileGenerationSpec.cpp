@@ -545,7 +545,7 @@ void FTileGenerationSpec::Define()
 			FTileGenerationContext Context(Grid, 1);
 			Context.HeightField = Heights;
 			ULakesAndRiversPass* Pass = NewObject<ULakesAndRiversPass>();
-			Pass->RiverCount = 0;
+			Pass->RiverDensity = 0.f;
 			Pass->MinLakeSize = InMinLakeSize;
 			Pass->Execute(Context);
 		};
@@ -613,7 +613,7 @@ void FTileGenerationSpec::Define()
 			}
 
 			ULakesAndRiversPass* Pass = NewObject<ULakesAndRiversPass>();
-			Pass->RiverCount = 1;
+			Pass->RiverDensity = 1.f;
 			Pass->SourceMinHeight = 0.87f;
 			Pass->MinRiverLength = 5;
 			Pass->WidenEvery = InWidenEvery;
@@ -676,6 +676,72 @@ void FTileGenerationSpec::Define()
 			int32 LastColumn = 0;
 			for (int32 Y = 0; Y < Wide.GetSize().Y; ++Y) LastColumn += Wide.GetTile(FIntPoint(Wide.GetSize().X - 1, Y)).IsWater() ? 1 : 0;
 			TestTrue(TEXT("Three wide at the mouth"), LastColumn >= 3);
+		});
+
+		It("gives a bigger map more rivers", [this]()
+		{
+			const ULakesAndRiversPass* Pass = GetDefault<ULakesAndRiversPass>();
+			TestEq(*this, TEXT("128 x 128"), Pass->GetRiverTarget(128 * 128), 5);
+			TestEq(*this, TEXT("1024 x 1024"), Pass->GetRiverTarget(1024 * 1024), 320);
+			TestEq(*this, TEXT("A small map still gets one"), Pass->GetRiverTarget(10 * 10), 1);
+
+			ULakesAndRiversPass* None = NewObject<ULakesAndRiversPass>();
+			None->RiverDensity = 0.f;
+			TestEq(*this, TEXT("No density, no rivers"), None->GetRiverTarget(1024 * 1024), 0);
+		});
+
+		It("skips sources whose river would be too short instead of losing the river", [this]()
+		{
+			// The land runs east along a valley. Six high tiles near the east edge would make rivers of a
+			// few tiles; one high tile in the far west makes a long one. One river is asked for, and the
+			// seed decides which candidate is tried first.
+			constexpr int32 Width = 30;
+			constexpr int32 Height = 7;
+			const auto IsShortSource = [](int32 X, int32 Y) { return (X == 26 || X == 27) && Y >= 2 && Y <= 4; };
+
+			for (int32 Seed = 1; Seed <= 8; ++Seed)
+			{
+				FTileGrid Grid(MakeLayout(Width, Height));
+				for (int32 Y = 0; Y < Height; ++Y)
+				{
+					for (int32 X = 0; X < Width; ++X)
+					{
+						Grid.ApplyMutation(FIntPoint(X, Y), FTileMutation().SetType(ETileType::Grass).SetBiome(EBiomeType::Plains).SetHeight(2));
+					}
+				}
+
+				FTileGenerationContext Context(Grid, Seed);
+				Context.HeightField.SetNum(Width * Height);
+				for (int32 Y = 0; Y < Height; ++Y)
+				{
+					for (int32 X = 0; X < Width; ++X)
+					{
+						const bool bSource = IsShortSource(X, Y) || (X == 1 && Y == 3);
+						Context.HeightField[X + Y * Width] = bSource ? 0.9f : 0.5f - X * 0.01f + FMath::Abs(Y - Height / 2) * 0.01f;
+					}
+				}
+
+				ULakesAndRiversPass* Pass = NewObject<ULakesAndRiversPass>();
+				Pass->RiverDensity = 1.f;
+				Pass->SourceMinHeight = 0.85f;
+				Pass->MinSourceSpacing = 1;
+				Pass->MinRiverLength = 12;
+				Pass->Execute(Context);
+
+				int32 WestWater = 0;
+				int32 EastWater = 0;
+				for (int32 Y = 0; Y < Height; ++Y)
+				{
+					for (int32 X = 0; X < Width; ++X)
+					{
+						if (!Grid.GetTile(FIntPoint(X, Y)).IsWater()) continue;
+						if (X < 20) ++WestWater;
+						else if (IsShortSource(X, Y)) ++EastWater;
+					}
+				}
+				TestTrue(*FString::Printf(TEXT("Seed %d: the long river is made"), Seed), WestWater >= 10);
+				TestEq(*this, *FString::Printf(TEXT("Seed %d: no short river"), Seed), EastWater, 0);
+			}
 		});
 	});
 

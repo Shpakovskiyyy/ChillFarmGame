@@ -128,6 +128,13 @@ void UElevationPass::Execute(FTileGenerationContext& Context) const
 
 /* Lakes and rivers */
 
+int32 ULakesAndRiversPass::GetRiverTarget(int32 InNumTiles) const
+{
+	// Rounded up, so any density gives a small map at least one river.
+	constexpr double TilesPerDensityArea = 128.0 * 128.0;
+	return FMath::CeilToInt32(static_cast<double>(RiverDensity) * InNumTiles / TilesPerDensityArea);
+}
+
 void ULakesAndRiversPass::Execute(FTileGenerationContext& Context) const
 {
 	const FTileGrid& Grid = Context.Grid;
@@ -261,19 +268,6 @@ void ULakesAndRiversPass::Execute(FTileGenerationContext& Context) const
 	}
 	for (int32 Index = Candidates.Num() - 1; Index > 0; --Index) Candidates.Swap(Index, Stream.RandRange(0, Index));
 
-	TArray<int32> Sources;
-	for (const int32 Candidate : Candidates)
-	{
-		if (Sources.Num() >= RiverCount) break;
-		const FIntPoint Tile = Layout.ToTile(Candidate);
-		const bool bFarEnough = !Sources.ContainsByPredicate([&](int32 Source)
-		{
-			const FIntPoint Other = Layout.ToTile(Source);
-			return FMath::Max(FMath::Abs(Other.X - Tile.X), FMath::Abs(Other.Y - Tile.Y)) < MinSourceSpacing;
-		});
-		if (bFarEnough) Sources.Add(Candidate);
-	}
-
 	// Follow every river down to water. Flow counts the rivers through a tile (2 or more after a join),
 	// Length the distance from the source, so the river can widen.
 	TArray<int32> Flow;
@@ -282,11 +276,24 @@ void ULakesAndRiversPass::Execute(FTileGenerationContext& Context) const
 	Length.Init(0, NumTiles);
 	TArray<int32> Surface;
 	Surface.Init(MAX_int32, NumTiles);
+	// Candidates are tried in the seed's order until the map has its rivers. A candidate becomes a source
+	// only once its river turns out long enough, so a short one does not use up a river.
+	const int32 TargetRivers = GetRiverTarget(NumTiles);
+	TArray<int32> Sources;
 	TArray<TArray<int32>> Rivers;
-	for (const int32 Source : Sources)
+	for (const int32 Candidate : Candidates)
 	{
+		if (Sources.Num() >= TargetRivers) break;
+		const FIntPoint Tile = Layout.ToTile(Candidate);
+		const bool bFarEnough = !Sources.ContainsByPredicate([&](int32 Source)
+		{
+			const FIntPoint Other = Layout.ToTile(Source);
+			return FMath::Max(FMath::Abs(Other.X - Tile.X), FMath::Abs(Other.Y - Tile.Y)) < MinSourceSpacing;
+		});
+		if (!bFarEnough) continue;
+
 		TArray<int32> Path;
-		int32 Current = Source;
+		int32 Current = Candidate;
 		int32 OwnLength = 0;
 		while (Current != INDEX_NONE && !IsWater[Current])
 		{
@@ -308,6 +315,7 @@ void ULakesAndRiversPass::Execute(FTileGenerationContext& Context) const
 			++Flow[Index];
 			Length[Index] = FMath::Max(Length[Index], Step);
 		}
+		Sources.Add(Candidate);
 		Rivers.Add(MoveTemp(Path));
 	}
 

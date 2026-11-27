@@ -91,7 +91,8 @@ public:
 // tile gets the lowest height at which water standing on it could run off, and the tile it would run
 // off to. A group of tiles filled at least MinLakeDepth above the ground, and at least MinLakeSize big,
 // is a basin and becomes a lake, at any height, one level below its lowest bank.
-// Rivers start on high ground (picked by the seed, apart from each other) and follow the run-off
+// Rivers start on high ground (picked by the seed, apart from each other, as many as RiverDensity asks
+// for the map's area; a source whose river would be shorter than MinRiverLength is skipped) and follow the run-off
 // directions to a lake, the sea or the map edge. Their surface sits one level below the banks and never
 // rises downstream, so they drop where the land does; the Terraces pass then cuts the banks into valley
 // walls. They start one tile wide and widen downstream and where rivers join.
@@ -105,6 +106,9 @@ public:
 	virtual void Execute(FTileGenerationContext& Context) const override;
 	virtual FName GetStepName() const override { return TEXT("Water"); }
 
+	// How many rivers a map of this many tiles gets.
+	int32 GetRiverTarget(int32 InNumTiles) const;
+
 public:
 	// How deep (in height noise, 0..1) a basin must be before it holds a lake.
 	UPROPERTY(EditAnywhere, Category = "Lakes", meta = (ClampMin = "0.001", ClampMax = "1"))
@@ -114,9 +118,10 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Lakes", meta = (ClampMin = "1"))
 	int32 MinLakeSize = 16;
 
-	// How many rivers to try to start. Fewer appear when there is not enough high ground.
-	UPROPERTY(EditAnywhere, Category = "Rivers", meta = (ClampMin = "0", ClampMax = "64"))
-	int32 RiverCount = 5;
+	// Rivers per 128 x 128 tiles, so a bigger map gets more of them (rounded up: any density gives a
+	// small map at least one). Fewer appear when there is not enough high ground.
+	UPROPERTY(EditAnywhere, Category = "Rivers", meta = (ClampMin = "0"))
+	float RiverDensity = 5.f;
 
 	// A river starts where the height noise is at least this.
 	UPROPERTY(EditAnywhere, Category = "Rivers", meta = (ClampMin = "0", ClampMax = "1"))
