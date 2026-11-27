@@ -239,6 +239,56 @@ void ATileVisualGrid::BuildChunk(const FTileGrid& InGrid, const FIntPoint& InChu
 	}
 
 	BuildChunkCliffs(InGrid, InChunk, First, End);
+	BuildChunkWaterBlockers(InGrid, InChunk, First, End);
+}
+
+void ATileVisualGrid::BuildChunkWaterBlockers(const FTileGrid& InGrid, const FIntPoint& InChunk, const FIntPoint& InFirst, const FIntPoint& InEnd)
+{
+	// Tall enough that a character on a bank can neither step nor jump in.
+	constexpr int32 BlockerLevels = 3;
+
+	const FTileGridLayout& Layout = InGrid.GetLayout();
+	TArray<FIntPoint> WaterTiles;
+	for (int32 Y = InFirst.Y; Y < InEnd.Y; ++Y)
+	{
+		for (int32 X = InFirst.X; X < InEnd.X; ++X)
+		{
+			if (InGrid.GetTile(FIntPoint(X, Y)).IsWater()) WaterTiles.Add(FIntPoint(X, Y));
+		}
+	}
+	if (WaterTiles.IsEmpty()) return;
+
+	// Any box works; the cliff mesh is one the visual set already has.
+	UStaticMesh* Mesh = TilesVisualSet->CliffMesh;
+	if (!Mesh)
+	{
+		UE_LOG(LogTileVisualGrid, Warning, TEXT("'%s' Has no cliff mesh, water in chunk (%d, %d) can be walked on"),
+			*GetNameSafe(TilesVisualSet), InChunk.X, InChunk.Y);
+		return;
+	}
+
+	const FBox MeshBounds = Mesh->GetBoundingBox();
+	TArray<FTransform> Transforms;
+	Transforms.Reserve(WaterTiles.Num());
+	for (const FIntPoint& Tile : WaterTiles)
+	{
+		const int32 Level = InGrid.GetTile(Tile).Height;
+		Transforms.Add(TileCliffs::MakeColumnTransform(Layout, Tile, Level, Level + BlockerLevels, MeshBounds));
+	}
+
+	UHierarchicalInstancedStaticMeshComponent* Component = CreateChunkComponent(
+		FString::Printf(TEXT("Chunk_X%d_Y%d_WaterBlockers"), InChunk.X, InChunk.Y), Mesh, nullptr);
+
+	// Only characters collide; traces (clicks, camera) and everything else pass through.
+	Component->SetCollisionEnabled(ECollisionEnabled::QueryAndPhysics);
+	Component->SetCollisionResponseToAllChannels(ECR_Ignore);
+	Component->SetCollisionResponseToChannel(ECC_Pawn, ECR_Block);
+	Component->SetVisibility(false);
+	Component->SetHiddenInGame(true);
+	Component->SetCastShadow(false);
+	Component->AddInstances(Transforms, /*bShouldReturnIndices*/ false, /*bWorldSpace*/ true);
+
+	Chunks.FindOrAdd(InChunk).WaterBlockers = Component;
 }
 
 void ATileVisualGrid::BuildChunkCliffs(const FTileGrid& InGrid, const FIntPoint& InChunk, const FIntPoint& InFirst, const FIntPoint& InEnd)
@@ -306,6 +356,7 @@ void ATileVisualGrid::DestroyChunk(const FIntPoint& InChunk)
 		if (Component) Component->DestroyComponent();
 	}
 	if (Chunk->Cliffs) Chunk->Cliffs->DestroyComponent();
+	if (Chunk->WaterBlockers) Chunk->WaterBlockers->DestroyComponent();
 	for (UHierarchicalInstancedStaticMeshComponent* Component : Chunk->Slopes)
 	{
 		if (Component) Component->DestroyComponent();
@@ -347,6 +398,7 @@ void ATileVisualGrid::FinalizeNavigation(const FBox& InDirtyArea)
 			if (Component) Component->BuildTreeIfOutdated(/*Async*/ false, /*ForceUpdate*/ false);
 		}
 		if (Chunk.Cliffs) Chunk.Cliffs->BuildTreeIfOutdated(/*Async*/ false, /*ForceUpdate*/ false);
+		if (Chunk.WaterBlockers) Chunk.WaterBlockers->BuildTreeIfOutdated(/*Async*/ false, /*ForceUpdate*/ false);
 		for (UHierarchicalInstancedStaticMeshComponent* Component : Chunk.Slopes)
 		{
 			if (Component) Component->BuildTreeIfOutdated(/*Async*/ false, /*ForceUpdate*/ false);

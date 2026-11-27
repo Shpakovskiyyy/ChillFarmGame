@@ -206,6 +206,14 @@ void FTileCliffsSpec::Define()
 			TestTrue(TEXT("Fills the tile"), Piece.TransformBy(SouthWest).Equals(FBox(FVector(100.0, 100.0, 0.0), FVector(200.0, 200.0, 50.0)), 0.01));
 		});
 
+		It("stretches a mesh into a column over one tile between two levels", [this, Layout]()
+		{
+			// A cube with a corner pivot; test layout: 100 per tile, 50 per level.
+			const FBox Cube(FVector(0.0), FVector(100.0));
+			const FBox Column = Cube.TransformBy(TileCliffs::MakeColumnTransform(Layout, FIntPoint(1, 2), 1, 4, Cube));
+			TestTrue(TEXT("Fills the tile from level 1 to 4"), Column.Equals(FBox(FVector(100.0, 200.0, 50.0), FVector(200.0, 300.0, 200.0)), 0.01));
+		});
+
 		It("starts at the lower level, not at the ground", [this, Layout]()
 		{
 			const FBox Cube(FVector(-50.0), FVector(50.0));

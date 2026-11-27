@@ -15,6 +15,10 @@ struct FTileChunkVisualData
 	UPROPERTY()
 	TMap<FTileVisualKey, UHierarchicalInstancedStaticMeshComponent*> Meshes;
 
+	// Invisible boxes over water that only characters collide with, so water cannot be walked on.
+	UPROPERTY()
+	UHierarchicalInstancedStaticMeshComponent* WaterBlockers = nullptr;
+
 	// The sides between elevation levels, see TileCliffs.
 	UPROPERTY()
 	UHierarchicalInstancedStaticMeshComponent* Cliffs = nullptr;

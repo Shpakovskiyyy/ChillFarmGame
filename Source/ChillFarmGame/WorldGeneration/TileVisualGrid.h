@@ -49,6 +49,11 @@ protected:
 private:
 	void BuildChunk(const FTileGrid& InGrid, const FIntPoint& InChunk);
 	void BuildChunkCliffs(const FTileGrid& InGrid, const FIntPoint& InChunk, const FIntPoint& InFirst, const FIntPoint& InEnd);
+
+	// Water is drawn like any surface, so on its own a character could stand on it. Every water tile
+	// gets an invisible box from the water up WaterBlockerLevels levels that blocks only characters
+	// (traces for clicks and the camera pass through) and keeps the navmesh off the water.
+	void BuildChunkWaterBlockers(const FTileGrid& InGrid, const FIntPoint& InChunk, const FIntPoint& InFirst, const FIntPoint& InEnd);
 	UHierarchicalInstancedStaticMeshComponent* CreateChunkComponent(const FString& InBaseName, UStaticMesh* InMesh, UMaterialInterface* InMaterial);
 	void DestroyChunk(const FIntPoint& InChunk);
 	FBox GetChunkBounds(const FTileGrid& InGrid, const FIntPoint& InChunk) const;

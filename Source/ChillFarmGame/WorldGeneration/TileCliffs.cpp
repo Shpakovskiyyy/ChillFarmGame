@@ -68,6 +68,22 @@ FTransform TileCliffs::MakeWallTransform(const FTileGridLayout& InLayout, const 
 	return FTransform(Rotation, WallCenter - MeshCenter, Scale);
 }
 
+FTransform TileCliffs::MakeColumnTransform(const FTileGridLayout& InLayout, const FIntPoint& InTile, int32 InBottomLevel, int32 InTopLevel, const FBox& InMeshBounds)
+{
+	const double Bottom = InLayout.LevelToZ(InBottomLevel);
+	const double Top = InLayout.LevelToZ(FMath::Max(InTopLevel, InBottomLevel + 1));
+
+	const FVector MeshSize = InMeshBounds.GetSize();
+	const FVector Scale(
+		InLayout.TileSize / FMath::Max(MeshSize.X, UE_KINDA_SMALL_NUMBER),
+		InLayout.TileSize / FMath::Max(MeshSize.Y, UE_KINDA_SMALL_NUMBER),
+		(Top - Bottom) / FMath::Max(MeshSize.Z, UE_KINDA_SMALL_NUMBER));
+
+	FVector Center = InLayout.TileCenter(InTile, 0);
+	Center.Z = (Top + Bottom) * 0.5;
+	return FTransform(FQuat::Identity, Center - InMeshBounds.GetCenter() * Scale, Scale);
+}
+
 double TileCliffs::GetFacingYaw(const FIntPoint& InFacing)
 {
 	return FMath::RadiansToDegrees(FMath::Atan2(static_cast<double>(InFacing.Y), static_cast<double>(InFacing.X)));

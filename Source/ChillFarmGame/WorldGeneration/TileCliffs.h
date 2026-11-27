@@ -51,6 +51,11 @@ namespace TileCliffs
 	// the slope to cover the tile. Used when the visual set has no slope mesh; the sides stay open.
 	CHILLFARMGAME_API FTransform MakeTiltedTileTransform(const FTileGridLayout& InLayout, const FIntPoint& InTile, uint8 InLevel, const FIntPoint& InRisesTowards, const FBox& InMeshBounds);
 
+	// Instance transform that stretches a mesh with the given bounds into a box over one whole tile,
+	// from InBottomLevel up to InTopLevel. Works for any mesh pivot. Used for the invisible blockers
+	// that keep characters out of water.
+	CHILLFARMGAME_API FTransform MakeColumnTransform(const FTileGridLayout& InLayout, const FIntPoint& InTile, int32 InBottomLevel, int32 InTopLevel, const FBox& InMeshBounds);
+
 	// Yaw in degrees of a grid offset (see TileData::GetSlopeFacing), the angle UE turns X onto it by.
 	CHILLFARMGAME_API double GetFacingYaw(const FIntPoint& InFacing);
 
