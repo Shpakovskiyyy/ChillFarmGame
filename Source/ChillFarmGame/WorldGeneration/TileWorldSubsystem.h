@@ -47,6 +47,11 @@ public:
 	// Changes one tile of the live map. Returns the fields that changed.
 	ETileField MutateTile(const FIntPoint& InTile, const FTileMutation& InMutation, const FTileChangeContext& InContext);
 
+	// Applies the same mutation to many tiles. Every tile still gets its own OnTileChanged, but
+	// OnTilesChanged fires once with all the tiles that changed, so visuals redraw each chunk once.
+	// Returns how many tiles changed.
+	int32 MutateTiles(TConstArrayView<FIntPoint> InTiles, const FTileMutation& InMutation, const FTileChangeContext& InContext);
+
 	// Reports a change that was applied to a grid this subsystem does not own yet (a grid that is being
 	// generated). Lets tools record generation steps without generation knowing about them.
 	void NotifyExternalChange(const FTileChange& InChange) const;

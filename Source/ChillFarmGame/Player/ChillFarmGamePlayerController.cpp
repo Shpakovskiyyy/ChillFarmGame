@@ -2,6 +2,7 @@
 
 #include "GameFramework/Pawn.h"
 #include "Engine/World.h"
+#include "Engine/Engine.h"
 #include "Engine/LocalPlayer.h"
 
 #include "EnhancedInputComponent.h"
@@ -10,6 +11,8 @@
 #include "NiagaraFunctionLibrary.h"
 #include "Blueprint/AIBlueprintHelperLibrary.h"
 
+#include "CropSubsystem.h"
+#include "CropType.h"
 #include "TileFarming.h"
 #include "TileMutation.h"
 #include "TileWorldSubsystem.h"
@@ -49,7 +52,7 @@ void AChillFarmGamePlayerController::SetupInputComponent()
 		EnhancedInputComponent->BindAction( SetDestinationClickAction, ETriggerEvent::Canceled, this, &AChillFarmGamePlayerController::OnSetDestinationReleased );
 
 		if (UseToolAction) EnhancedInputComponent->BindAction( UseToolAction, ETriggerEvent::Started, this, &AChillFarmGamePlayerController::OnUseTool );
-		else UE_LOG(LogCFGPlayerController, Warning, TEXT("'%s' Has no UseToolAction, tiles cannot be tilled or watered"), *GetNameSafe(this));
+		else UE_LOG(LogCFGPlayerController, Warning, TEXT("'%s' Has no UseToolAction, the farming tool is unavailable"), *GetNameSafe(this));
 	}
 	else UE_LOG(LogCFGPlayerController, Error, TEXT("'%s' Failed to find EnhancedInputComponent"), *GetNameSafe(this));
 }
@@ -116,11 +119,43 @@ void AChillFarmGamePlayerController::OnUseTool()
 		return;
 	}
 
+	UCropSubsystem* Crops = GetWorld()->GetSubsystem<UCropSubsystem>();
+	const UCropType* Seed = GetSeedCrop();
+
+	TileFarming::FFarmActionInput Input;
+	Input.bHasCrop = Crops && Crops->HasCrop(Target);
+	Input.bCropRipe = Crops && Crops->CanHarvest(Target);
+	Input.bHasSeed = Crops && Seed;
+
+	const TileFarming::EFarmAction Action = TileFarming::ChooseAction(*Tile, Input);
+	switch (Action)
+	{
+		case TileFarming::EFarmAction::Harvest:
+		{
+			const FPlantedCrop* Crop = Crops->FindCrop(Target);
+			const FText Name = Crop && Crop->Type ? Crop->Type->DisplayName : FText::GetEmpty();
+			const int32 Yield = Crops->Harvest(Target);
+			UE_LOG(LogCFGPlayerController, Log, TEXT("Harvested %d x %s at (%d, %d)"), Yield, *Name.ToString(), Target.X, Target.Y);
+			if (GEngine) GEngine->AddOnScreenDebugMessage(INDEX_NONE, 3.f, FColor::Green, FString::Printf(TEXT("+%d %s"), Yield, *Name.ToString()));
+			return;
+		}
+		case TileFarming::EFarmAction::Plant:
+			Crops->Plant(Target, *Seed);
+			return;
+		default:
+			break;
+	}
+
 	FTileMutation Mutation;
 	FTileChangeContext Context;
 	Context.Source = ETileMutationSource::Gameplay;
 	Context.Instigator = this;
-	if (!TileFarming::MakeToolMutation(*Tile, Mutation, Context.Step)) return;
+	if (TileFarming::MakeActionMutation(Action, Mutation, Context.Step)) TileWorld->MutateTile(Target, Mutation, Context);
+}
 
-	TileWorld->MutateTile(Target, Mutation, Context);
+const UCropType* AChillFarmGamePlayerController::GetSeedCrop() const
+{
+	// Until there is an inventory, the seed comes from the controller; the placeholder crop (the class
+	// defaults of UCropType) keeps the loop playable before any crop asset exists.
+	return SeedCrop ? SeedCrop.Get() : GetDefault<UCropType>();
 }

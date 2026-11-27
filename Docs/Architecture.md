@@ -106,13 +106,22 @@ Draws the subsystem's grid with one HISM component per autotile piece per chunk.
 - Places each mesh so the centre of its bounds sits on the tile centre and its top is flush with the tile level, whatever the mesh pivot is.
 - Components are transient. The level saves the seed and settings, not 16 000 instances; the editor module regenerates the map when a level opens.
 
-### 2.5 Editor tools
+### 2.5 Farming: crops and the day cycle
+
+- `TileFarming` (pure rules) decides what the single use action does on a tile, in loop order: harvest a ripe crop, till grass or dirt, plant on empty farmland, water dry farmland. Tilling and watering are tile mutations; planting and harvesting change crops, not tiles.
+- `UCropType` (data asset) is a crop's stages (watered nights per stage, mesh, material, scale), its harvest yield and an optional regrow stage. Its class defaults are a placeholder crop of engine shapes, used when the controller's `SeedCrop` is empty.
+- `UCropSubsystem` (world subsystem) holds the planted crops as `TMap<FIntPoint, FPlantedCrop>`, next to the tile map, not inside it. It listens to `UTileWorldSubsystem`: a tile that stops being farmland loses its crop, a cleared or rebuilt map loses them all. `CropGrowth` holds the growth rules (one watered night counts one day; a dry night waits; ripe crops do not change).
+- `ACropVisuals` is spawned by the crop subsystem when play begins and draws the crops with one HISM per stage look, rebuilt on `OnCropsChanged`.
+- `UDayCycleSubsystem` (game and PIE worlds only) counts days. A day lasts `CFG.Farming.DayLengthSeconds` (600 by default, 0 stops the clock); `CFG.Farming.NextDay` skips the night. The night is one ordered step: crops grow from today's water, then the Watered flag is cleared on every tile in one `MutateTiles` call (`Simulation` / `Overnight`), then the day number goes up.
+- `UTileWorldSubsystem::MutateTiles` applies one mutation to many tiles: one `OnTileChanged` per tile for history, one `OnTilesChanged` for all of them so visuals redraw each chunk once.
+
+### 2.6 Editor tools
 
 - `UTileHistoryEditorSubsystem` (editor worlds only) records every `FTileChange`. The runtime contains no history code.
 - `UTileDebugSelectionEditorSubsystem` maps a click on the tile map to a tile through the layout (`ImpactPoint` pushed slightly into the surface), and draws the highlight box from the layout.
 - `STileInspectorWindow` shows the tile's current data and its history: one header per change (`#3  WorldGeneration / Shores: Next to water`) and one line per changed field (`Type: Grass -> Sand`). It polls a version number, which survives map changes without delegate bookkeeping.
 
-### 2.6 Tests
+### 2.7 Tests
 
 Automation specs live in `Source/ChillFarmGame/Tests`, grouped under `ChillFarmGame.TileWorld`:
 
@@ -124,9 +133,11 @@ Automation specs live in `Source/ChillFarmGame/Tests`, grouped under `ChillFarmG
 | `Generation` | Generation context, `TileGeneration::RunPasses` (order, disabled passes, all-or-nothing setup check), each pass on hand-made grids, and the full pipeline: determinism, world invariants (no steep steps, shores are sand, water on level 0...), and replaying the recorded history rebuilds the exact final world |
 | `Subsystem` | `UTileWorldSubsystem` events, runtime edits, position lookup |
 | `Cliffs` | Which edges get a side (raised tiles, deeper drops, map edges, chunk ranges, slopes), wall and slope piece placement for any mesh pivot |
-| `Farming` | Tilling and watering rules (no farmland on slopes), the use action, a gameplay change reaching listeners with its step |
+| `Farming` | Tilling, watering and drying rules (no farmland on slopes), the use action's choice through the loop (till, plant, water, harvest), a gameplay change reaching listeners with its step |
 | `Reachability` | Which neighbours can be stepped between (corner heights, slopes, water), walkable areas and land islands |
 | `TerrainStats` | The terrain numbers: flat and raised land, cliff edges, flat areas, farm sites and non-overlapping farm plots, largest flat square, distance to the edge of a terrace |
+
+`ChillFarmGame.Farming.Crops` covers the farming loop: growth rules (stage days, dry nights, regrow), planting and harvesting through `UCropSubsystem` (farmland only, once per tile, crops dropped with their farmland or the map), and the day cycle (watered crops grow before the land dries, one visual update per night, the placeholder crop ripens in its days to ripe).
 
 `ChillFarmGame.Reports.TerrainStats` is not a check but a report: it runs the game's default pipeline with the GenerationTest biome data on seeds 1..12 for several `LevelStep` values and writes the numbers per seed and on average to the log and `Saved/Reports/TerrainStats.md`. Use it when tuning generation settings.
 
@@ -288,6 +299,13 @@ Each entry: what it was, what it is now, why, and what it costs.
 - **Measured** (terrain report, 12 seeds): about 424 lake tiles and 176 river tiles per 128 × 128 map; farm plots 31 on average (fewest 21) instead of 38, because water takes land. Shallower lake thresholds (0.01, 0.005) mostly add marshy fringes, so 0.02 stays.
 - **Why:** water that follows the shape of the land is what makes a map readable and gives farm sites something to be near. Depth below the banks is the look of the reference style and the start of valleys.
 - **Cost:** rivers may cut land in two; crossings are left to bridges (the player decides when). Rivers are carved on the generation grid, so their banks follow tile steps.
+### D18. Crops live next to the tile map, the night is one ordered step
+
+- **Before:** tilling and watering only; `ACropBase` was an unused actor stub, and nothing cleared the Watered flag.
+- **After:** crops are entries in `UCropSubsystem` keyed by tile, pointing at a `UCropType` asset; one HISM actor draws them all. `UDayCycleSubsystem` runs the night: grow, dry, next day. `ACropBase` is removed. The default map is 1024 × 1024 (`GridSizeX/Y`), the size tests and reports use from now on.
+- **Why:** a crop has state a tile does not (type, age) and most tiles never hold one, so keeping it out of the 7-byte `FTileData` keeps the grid cheap and copyable. One actor per crop would cost a tick, a scene component and a draw call each; data plus instancing costs almost nothing. The night is explicit rather than a set of listeners to `OnDayStarted` because its order matters: if the land dried first, no crop would ever grow.
+- **Cost:** crop visuals rebuild every instance on any change, which is fine for hundreds of crops and must become per-instance updates for very large fields. Crops hold a pointer to their type, so saving (roadmap step 6) needs to store the asset path. Harvests only log and show a message until there is an inventory. Drying scans the whole grid once per night (about a million tiles at 1024 × 1024, a few milliseconds).
+
 ---
 
 ## 5. What I deliberately did not change
@@ -332,7 +350,7 @@ Ordered so each step is visible and testable on its own, and nothing already wor
 2. **Ramps and reachability.** Done (D13, D14): slopes join much of the land, and the Ramps pass joins every remaining terrace to the rest of its island. Once roads exist, start the flood fill from the road instead of the largest area.
 3. **Water and valleys.** First version done (D17): base level 2, lakes in basins at any height, rivers downhill one level below their banks. Still to do: valleys and canyons as their own feature (carved below the base, not only around rivers), and bridges.
 4. **Roads and farm sites.** A* road pass over a cost field (slope, water, biome). Derived per-tile fields with breadth-first distance transforms: distance to water, to road, size of the flat area. A scoring pass that rates farm sites and a validation pass that guarantees enough good ones. The inspector overlay for these fields is the prototype of the player's site selection screen.
-5. **Gameplay edits.** Tilling and watering are in (`TileFarming`, right mouse, `ETileType::Farmland`, `ETileFlags::Watered`); building is next. All through `UTileWorldSubsystem::MutateTile` with `ETileMutationSource::Gameplay`. Keep crops, buildings and items out of `FTileData`: they are sparse objects keyed by tile coordinate in their own systems, which listen to tile changes.
+5. **Gameplay edits.** Tilling, watering, planting, growth and harvest are in (`TileFarming`, `UCropSubsystem`, `UDayCycleSubsystem`, right mouse, D18). Next: an inventory for seeds and harvests, a bed or sleep action for the night, crop assets with real art, then building. All through `UTileWorldSubsystem::MutateTile` with `ETileMutationSource::Gameplay`. Keep crops, buildings and items out of `FTileData`: they are sparse objects keyed by tile coordinate in their own systems, which listen to tile changes.
 6. **Saving.** Seed + generation settings + the list of gameplay changes (or a diff of the grid against a fresh generation). Small, and old saves keep working when unrelated generation code changes only if generation stays deterministic, which the determinism test guards.
 7. **Scale.** The target is a big world with high mountains: larger maps, higher per-biome `MaxLevel` for mountains, tuned with the terrain report at the real map size once generation is complete. Run passes on a worker thread (they already have no world access), then chunk streaming for visuals.
 8. **Rendering decision.** Revisit HISM vs. generated chunk meshes once cliffs exist and the target map size is known.

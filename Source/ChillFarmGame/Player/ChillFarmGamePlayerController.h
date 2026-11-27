@@ -8,6 +8,7 @@
 class UNiagaraSystem;
 class UInputMappingContext;
 class UInputAction;
+class UCropType;
 
 DECLARE_LOG_CATEGORY_EXTERN(LogCFGPlayerController, Log, All);
 
@@ -35,13 +36,17 @@ protected:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category=Input, meta=(AllowPrivateAccess = "true"))
 	UInputAction* SetDestinationClickAction;
 
-	/** Uses the current tool on the tile under the cursor: tills grass or dirt, waters farmland. */
+	/** Uses the tool on the tile under the cursor: harvests a ripe crop, tills grass or dirt, plants on empty farmland, waters dry farmland. */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category=Input, meta=(AllowPrivateAccess = "true"))
 	UInputAction* UseToolAction;
 
 	/** How far from the character's tile the tool reaches, in tiles (diagonals count as one). */
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Farming", meta = (ClampMin = "0"))
 	int32 UseToolRange = 2;
+
+	/** What the tool plants on empty farmland. Empty: the placeholder crop (UCropType's defaults). */
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Farming")
+	TObjectPtr<UCropType> SeedCrop = nullptr;
 
 protected:
 	/** True if the controlled character should navigate to the mouse cursor. */
@@ -57,6 +62,8 @@ protected:
 
 	/** Input handler for UseTool: finds the tile under the cursor and applies the tool to it. */
 	void OnUseTool();
+
+	const UCropType* GetSeedCrop() const;
 
 private:
 	FVector CachedDestination;

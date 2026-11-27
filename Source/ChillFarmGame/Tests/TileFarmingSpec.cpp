@@ -11,6 +11,22 @@
 
 using namespace TileTestUtils;
 
+namespace TileFarming
+{
+	// Found by TestEq through argument-dependent lookup: EFarmAction is not a reflected enum.
+	inline FString ToTestString(EFarmAction InAction)
+	{
+		switch (InAction)
+		{
+			case EFarmAction::Harvest: return TEXT("Harvest");
+			case EFarmAction::Till:    return TEXT("Till");
+			case EFarmAction::Plant:   return TEXT("Plant");
+			case EFarmAction::Water:   return TEXT("Water");
+			default:                   return TEXT("None");
+		}
+	}
+}
+
 namespace TileFarmingSpecPrivate
 {
 	FTileData MakeTile(ETileType InType, ETileFlags InFlags = ETileFlags::None)
@@ -98,33 +114,72 @@ void FTileFarmingSpec::Define()
 
 	Describe("The use action", [this]()
 	{
-		It("tills, then waters, then does nothing", [this]()
+		It("goes through the loop: till, plant, water, then waits, then harvests", [this]()
 		{
+			using namespace TileFarming;
 			FTileData Tile = MakeTile(ETileType::Dirt);
-			FTileMutation Mutation;
-			FName Step;
+			FFarmActionInput Input;
+			Input.bHasSeed = true;
 
-			TestTrue(TEXT("First use"), TileFarming::MakeToolMutation(Tile, Mutation, Step));
-			TestEq(*this, TEXT("First step"), Step, TileFarming::TillStep);
-			Mutation.ApplyTo(Tile);
+			TestEq(*this, TEXT("Dirt"), ChooseAction(Tile, Input), EFarmAction::Till);
+			MakeTill().ApplyTo(Tile);
 
-			TestTrue(TEXT("Second use"), TileFarming::MakeToolMutation(Tile, Mutation, Step));
-			TestEq(*this, TEXT("Second step"), Step, TileFarming::WaterStep);
-			Mutation.ApplyTo(Tile);
+			TestEq(*this, TEXT("Empty farmland"), ChooseAction(Tile, Input), EFarmAction::Plant);
+			Input.bHasCrop = true;
 
-			TestFalse(TEXT("Third use"), TileFarming::MakeToolMutation(Tile, Mutation, Step));
-			TestEq(*this, TEXT("Type"), Tile.Type, ETileType::Farmland);
-			TestTrue(TEXT("Watered"), Tile.HasFlag(ETileFlags::Watered));
+			TestEq(*this, TEXT("Dry crop"), ChooseAction(Tile, Input), EFarmAction::Water);
+			MakeWater().ApplyTo(Tile);
+
+			TestEq(*this, TEXT("Watered crop"), ChooseAction(Tile, Input), EFarmAction::None);
+
+			Input.bCropRipe = true;
+			TestEq(*this, TEXT("Ripe crop on watered land"), ChooseAction(Tile, Input), EFarmAction::Harvest);
+			MakeDry().ApplyTo(Tile);
+			TestEq(*this, TEXT("Ripe crop on dry land"), ChooseAction(Tile, Input), EFarmAction::Harvest);
+		});
+
+		It("waters empty farmland when there is no seed", [this]()
+		{
+			using namespace TileFarming;
+			TestEq(*this, TEXT("No seed"), ChooseAction(MakeTile(ETileType::Farmland), FFarmActionInput()), EFarmAction::Water);
+			TestEq(*this, TEXT("No seed, watered"), ChooseAction(MakeTile(ETileType::Farmland, ETileFlags::Watered), FFarmActionInput()), EFarmAction::None);
+
+			FFarmActionInput Seed;
+			Seed.bHasSeed = true;
+			TestEq(*this, TEXT("Seed on watered farmland"), ChooseAction(MakeTile(ETileType::Farmland, ETileFlags::Watered), Seed), EFarmAction::Plant);
 		});
 
 		It("does nothing on sand, rock or water", [this]()
 		{
-			FTileMutation Mutation;
-			FName Step;
+			using namespace TileFarming;
+			FFarmActionInput Input;
+			Input.bHasSeed = true;
 			for (const ETileType Type : { ETileType::Sand, ETileType::Rock, ETileType::Water })
 			{
-				TestFalse(*UEnum::GetValueAsString(Type), TileFarming::MakeToolMutation(MakeTile(Type), Mutation, Step));
+				TestEq(*this, *UEnum::GetValueAsString(Type), ChooseAction(MakeTile(Type), Input), EFarmAction::None);
 			}
+		});
+
+		It("changes tiles only for tilling and watering", [this]()
+		{
+			using namespace TileFarming;
+			FTileMutation Mutation;
+			FName Step;
+			TestTrue(TEXT("Till"), MakeActionMutation(EFarmAction::Till, Mutation, Step));
+			TestEq(*this, TEXT("Till step"), Step, TillStep);
+			TestTrue(TEXT("Water"), MakeActionMutation(EFarmAction::Water, Mutation, Step));
+			TestEq(*this, TEXT("Water step"), Step, WaterStep);
+			TestFalse(TEXT("Plant"), MakeActionMutation(EFarmAction::Plant, Mutation, Step));
+			TestFalse(TEXT("Harvest"), MakeActionMutation(EFarmAction::Harvest, Mutation, Step));
+			TestFalse(TEXT("None"), MakeActionMutation(EFarmAction::None, Mutation, Step));
+		});
+
+		It("dries watered land and keeps other flags", [this]()
+		{
+			FTileData Tile = MakeTile(ETileType::Farmland, ETileFlags::Watered | ETileFlags::Occupied);
+			TestEq(*this, TEXT("Changed"), TileFarming::MakeDry().ApplyTo(Tile), ETileField::Flags);
+			TestFalse(TEXT("Dry"), Tile.HasFlag(ETileFlags::Watered));
+			TestTrue(TEXT("Still occupied"), Tile.HasFlag(ETileFlags::Occupied));
 		});
 
 		It("reaches listeners as a gameplay change with its step", [this]()
@@ -141,7 +196,8 @@ void FTileFarmingSpec::Define()
 			FTileMutation Mutation;
 			FTileChangeContext Context;
 			Context.Source = ETileMutationSource::Gameplay;
-			TestTrue(TEXT("Grass can be used"), TileFarming::MakeToolMutation(*World->GetGrid().FindTile(Target), Mutation, Context.Step));
+			const TileFarming::EFarmAction Action = TileFarming::ChooseAction(*World->GetGrid().FindTile(Target), TileFarming::FFarmActionInput());
+			TestTrue(TEXT("Grass can be used"), TileFarming::MakeActionMutation(Action, Mutation, Context.Step));
 			World->MutateTile(Target, Mutation, Context);
 
 			if (!TestEq(*this, TEXT("Change events"), Changes.Num(), 1)) return;

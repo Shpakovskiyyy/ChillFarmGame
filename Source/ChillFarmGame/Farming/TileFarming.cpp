@@ -26,20 +26,29 @@ namespace TileFarming
 		return FTileMutation().SetFlag(ETileFlags::Watered, true);
 	}
 
-	bool MakeToolMutation(const FTileData& InTile, FTileMutation& OutMutation, FName& OutStep)
+	FTileMutation MakeDry()
 	{
-		if (CanTill(InTile))
+		return FTileMutation().SetFlag(ETileFlags::Watered, false);
+	}
+
+	EFarmAction ChooseAction(const FTileData& InTile, const FFarmActionInput& InInput)
+	{
+		if (InInput.bHasCrop && InInput.bCropRipe) return EFarmAction::Harvest;
+		if (CanTill(InTile)) return EFarmAction::Till;
+
+		// Plant before watering, so a fresh bed takes the seed first and the next click waters it.
+		if (InTile.Type == ETileType::Farmland && !InInput.bHasCrop && InInput.bHasSeed) return EFarmAction::Plant;
+
+		return CanWater(InTile) ? EFarmAction::Water : EFarmAction::None;
+	}
+
+	bool MakeActionMutation(EFarmAction InAction, FTileMutation& OutMutation, FName& OutStep)
+	{
+		switch (InAction)
 		{
-			OutMutation = MakeTill();
-			OutStep = TillStep;
-			return true;
+			case EFarmAction::Till:  OutMutation = MakeTill();  OutStep = TillStep;  return true;
+			case EFarmAction::Water: OutMutation = MakeWater(); OutStep = WaterStep; return true;
+			default: return false;
 		}
-		if (CanWater(InTile))
-		{
-			OutMutation = MakeWater();
-			OutStep = WaterStep;
-			return true;
-		}
-		return false;
 	}
 }

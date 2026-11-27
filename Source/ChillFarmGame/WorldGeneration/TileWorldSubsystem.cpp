@@ -44,6 +44,26 @@ ETileField UTileWorldSubsystem::MutateTile(const FIntPoint& InTile, const FTileM
 	return Change.ChangedFields;
 }
 
+int32 UTileWorldSubsystem::MutateTiles(TConstArrayView<FIntPoint> InTiles, const FTileMutation& InMutation, const FTileChangeContext& InContext)
+{
+	TArray<FIntPoint> Changed;
+	for (const FIntPoint& Tile : InTiles)
+	{
+		FTileChange Change;
+		Change.ChangedFields = Grid.ApplyMutation(Tile, InMutation, &Change.Before);
+		if (Change.ChangedFields == ETileField::None) continue;
+
+		Change.Coordinates = Tile;
+		Change.After = Grid.GetTile(Tile);
+		Change.Context = InContext;
+		OnTileChanged.Broadcast(Change);
+		Changed.Add(Tile);
+	}
+
+	if (!Changed.IsEmpty()) OnTilesChanged.Broadcast(TConstArrayView<FIntPoint>(Changed));
+	return Changed.Num();
+}
+
 void UTileWorldSubsystem::NotifyExternalChange(const FTileChange& InChange) const
 {
 	OnTileChanged.Broadcast(InChange);

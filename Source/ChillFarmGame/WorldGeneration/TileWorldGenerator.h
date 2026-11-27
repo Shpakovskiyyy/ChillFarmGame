@@ -68,10 +68,10 @@ protected:
 	bool bGenerateWhenLevelOpens = true;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid", meta = (ClampMin = "1", ClampMax = "2048"))
-	int32 GridSizeX = 128;
+	int32 GridSizeX = 1024;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid", meta = (ClampMin = "1", ClampMax = "2048"))
-	int32 GridSizeY = 128;
+	int32 GridSizeY = 1024;
 
 	// Edge length of one tile in world units.
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Grid", meta = (ClampMin = "1"))
