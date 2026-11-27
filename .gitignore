@@ -10,3 +10,5 @@ Saved/
 Binaries/
 Build/
 Content/StarterContent
+*.slnx
+.mcp.json
